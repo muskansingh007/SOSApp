@@ -3,19 +3,36 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
     Alert,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from "react-native";
-import MapView, { Circle, Marker } from "react-native-maps";
 import {
     cancelLocationUpdateNotifications,
     scheduleLocationUpdateNotification,
     sendSOSCancelledNotification,
 } from "../utils/notificationHelper";
 import { callEmergency, watchLocation } from "../utils/sosHelper";
+
+let MapView = null;
+let Circle = null;
+let Marker = null;
+
+if (Platform.OS !== "web") {
+  try {
+    // Use dynamic require to prevent bundler from statically analyzing the import
+    const moduleName = "react-native-maps";
+    const mapModule = require(moduleName);
+    MapView = mapModule.default;
+    Circle = mapModule.Circle;
+    Marker = mapModule.Marker;
+  } catch (e) {
+    // Maps not available on this platform
+  }
+}
 
 export default function AlertScreen() {
   const router = useRouter();

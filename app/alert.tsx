@@ -2,55 +2,45 @@ import { activateKeepAwake, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
+
 import {
-    cancelLocationUpdateNotifications,
-    scheduleLocationUpdateNotification,
-    sendSOSCancelledNotification,
+  cancelLocationUpdateNotifications,
+  scheduleLocationUpdateNotification,
+  sendSOSCancelledNotification,
 } from "../Screens/utils/NotificationHelper";
 import { callEmergency, watchLocation } from "../Screens/utils/sosHelper";
-
-let MapView, Circle, Marker;
-if (Platform.OS !== "web") {
-  const mapModule = require("react-native-maps");
-  MapView = mapModule.default;
-  Circle = mapModule.Circle;
-  Marker = mapModule.Marker;
-}
+import { Circle, MapView, Marker } from "./MapView";
 
 export default function AlertScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const initialCoords = JSON.parse(params.coords || "{}");
-  const contacts = JSON.parse(params.contacts || "[]");
+  const initialCoords = JSON.parse(typeof params.coords === "string" ? params.coords : "{}");
+  const contacts = JSON.parse(typeof params.contacts === "string" ? params.contacts : "[]");
   const [coords, setCoords] = useState(initialCoords);
   const [elapsed, setElapsed] = useState(0);
-  const subRef = useRef(null);
-  const timerRef = useRef(null);
+  const subRef = useRef<any>(null);
+  const timerRef = useRef<any>(null);
 
   useEffect(() => {
-    // Activate keep awake to prevent screen from sleeping during SOS
     activateKeepAwake();
 
-    // Start real-time location tracking
-    watchLocation((newCoords) => {
+    watchLocation((newCoords: any) => {
       setCoords(newCoords);
-      scheduleLocationUpdateNotification(newCoords); // refresh the scheduled notification
+      scheduleLocationUpdateNotification(newCoords);
     }).then((sub) => {
       subRef.current = sub;
     });
 
-    // Schedule first periodic location notification
     scheduleLocationUpdateNotification(initialCoords);
 
-    // Elapsed timer
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
 
     return () => {
@@ -61,7 +51,7 @@ export default function AlertScreen() {
     };
   }, []);
 
-  function formatTime(secs) {
+  function formatTime(secs: number) {
     const m = Math.floor(secs / 60)
       .toString()
       .padStart(2, "0");
@@ -87,14 +77,10 @@ export default function AlertScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Status bar */}
       <View style={styles.statusBar}>
-        <Text style={styles.statusText}>
-          🚨 SOS ACTIVE — {formatTime(elapsed)}
-        </Text>
+        <Text style={styles.statusText}>🚨 SOS ACTIVE — {formatTime(elapsed)}</Text>
       </View>
 
-      {/* Live map */}
       {Platform.OS !== "web" && MapView ? (
         <MapView
           style={styles.map}
@@ -116,30 +102,20 @@ export default function AlertScreen() {
         </MapView>
       ) : (
         <View style={styles.mapPlaceholder}>
-          <Text style={styles.mapPlaceholderText}>
-            Map not available on web
-          </Text>
+          <Text style={styles.mapPlaceholderText}>Map not available on web</Text>
         </View>
       )}
 
-      {/* Coords */}
       <Text style={styles.coords}>
-        📍 {coords.latitude.toFixed(5)}, {coords.longitude.toFixed(5)}
+        📍 {coords.latitude?.toFixed(5) ?? "--"}, {coords.longitude?.toFixed(5) ?? "--"}
       </Text>
 
-      {/* Notified contacts */}
       <Text style={styles.sectionTitle}>Notified contacts</Text>
-      <ScrollView
-        style={styles.contactList}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-      >
+      <ScrollView style={styles.contactList} horizontal showsHorizontalScrollIndicator={false}>
         {contacts.length === 0 ? (
-          <Text style={styles.noContacts}>
-            No contacts added — add them in the Contacts screen
-          </Text>
+          <Text style={styles.noContacts}>No contacts added — add them in the Contacts screen</Text>
         ) : (
-          contacts.map((c, i) => (
+          contacts.map((c: any, i: number) => (
             <View key={i} style={styles.contactChip}>
               <Text style={styles.contactName}>{c.name}</Text>
               <Text style={styles.contactPhone}>{c.phone}</Text>
@@ -148,11 +124,7 @@ export default function AlertScreen() {
         )}
       </ScrollView>
 
-      {/* Actions */}
-      <TouchableOpacity
-        style={styles.callBtn}
-        onPress={() => callEmergency("112")}
-      >
+      <TouchableOpacity style={styles.callBtn} onPress={() => callEmergency("112")}> 
         <Text style={styles.callBtnText}>📞 Call 112 (Emergency)</Text>
       </TouchableOpacity>
 
@@ -166,59 +138,19 @@ export default function AlertScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#1a1a1a" },
   statusBar: { backgroundColor: "#B71C1C", padding: 14, alignItems: "center" },
-  statusText: {
-    color: "#fff",
-    fontWeight: "900",
-    fontSize: 16,
-    letterSpacing: 1,
-  },
+  statusText: { color: "#fff", fontWeight: "900", fontSize: 16, letterSpacing: 1 },
   map: { height: 260 },
-  mapPlaceholder: {
-    height: 260,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#333",
-  },
-  mapPlaceholderText: {
-    color: "#fff",
-    fontSize: 16,
-  },
+  mapPlaceholder: { height: 260, justifyContent: "center", alignItems: "center", backgroundColor: "#333" },
+  mapPlaceholderText: { color: "#fff", fontSize: 16 },
   coords: { color: "#aaa", fontSize: 12, textAlign: "center", padding: 8 },
-  sectionTitle: {
-    color: "#fff",
-    fontWeight: "700",
-    fontSize: 14,
-    paddingHorizontal: 16,
-    marginTop: 8,
-  },
+  sectionTitle: { color: "#fff", fontWeight: "700", fontSize: 14, paddingHorizontal: 16, marginTop: 8 },
   contactList: { paddingHorizontal: 12, paddingVertical: 8, maxHeight: 90 },
   noContacts: { color: "#777", fontSize: 13, padding: 8 },
-  contactChip: {
-    backgroundColor: "#2a2a2a",
-    borderRadius: 10,
-    padding: 10,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: "#444",
-    minWidth: 100,
-  },
-  contactName: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  contactPhone: { color: "#aaa", fontSize: 11, marginTop: 2 },
-  callBtn: {
-    margin: 16,
-    backgroundColor: "#1565C0",
-    padding: 16,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  callBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  cancelBtn: {
-    marginHorizontal: 16,
-    marginBottom: 24,
-    backgroundColor: "#1b5e20",
-    padding: 14,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  cancelText: { color: "#a5d6a7", fontSize: 15, fontWeight: "700" },
+  contactChip: { backgroundColor: "#2a2a2a", borderRadius: 10, padding: 10, marginRight: 8 },
+  contactName: { color: "#fff", fontWeight: "700" },
+  contactPhone: { color: "#ccc", fontSize: 12, marginTop: 2 },
+  callBtn: { marginHorizontal: 16, padding: 16, borderRadius: 12, backgroundColor: "#d32f2f", marginTop: 10 },
+  callBtnText: { color: "#fff", fontWeight: "700", textAlign: "center" },
+  cancelBtn: { marginHorizontal: 16, padding: 16, borderRadius: 12, backgroundColor: "#444", marginTop: 10 },
+  cancelText: { color: "#fff", fontWeight: "700", textAlign: "center" },
 });
