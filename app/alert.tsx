@@ -32,14 +32,16 @@ export default function AlertScreen() {
   useEffect(() => {
     activateKeepAwake();
 
-    watchLocation((newCoords: any) => {
-      setCoords(newCoords);
-      scheduleLocationUpdateNotification(newCoords);
-    }).then((sub) => {
-      subRef.current = sub;
-    });
+    if (Platform.OS !== 'web') {
+      watchLocation((newCoords: any) => {
+        setCoords(newCoords);
+        scheduleLocationUpdateNotification(newCoords);
+      }).then((sub) => {
+        subRef.current = sub;
+      });
 
-    scheduleLocationUpdateNotification(initialCoords);
+      scheduleLocationUpdateNotification(initialCoords);
+    }
 
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
 

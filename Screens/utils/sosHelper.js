@@ -1,8 +1,13 @@
 import * as Location from 'expo-location';
 import * as SMS from 'expo-sms';
+import { Platform } from 'react-native';
 
 // Request location permission and get current coords
 export async function getCurrentLocation() {
+  if (Platform.OS === 'web') {
+    throw new Error('Location tracking is not supported on web');
+  }
+
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') {
     throw new Error('Location permission denied');
@@ -15,6 +20,10 @@ export async function getCurrentLocation() {
 
 // Watch location in real-time (returns a subscription to stop later)
 export async function watchLocation(callback) {
+  if (Platform.OS === 'web') {
+    return null;
+  }
+
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') return null;
   const sub = await Location.watchPositionAsync(
