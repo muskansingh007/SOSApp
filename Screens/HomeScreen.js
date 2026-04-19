@@ -1,14 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  View, Text, TouchableOpacity, StyleSheet, Alert,
-  Animated, Vibration, AsyncStorage,
-} from 'react-native';
 import { Accelerometer } from 'expo-sensors';
-import { getCurrentLocation, sendSOSMessages, callEmergency } from '../utils/sosHelper';
+import { useEffect, useRef, useState } from 'react';
 import {
-  sendSOSTriggerNotification,
-  sendSMSSentNotification,
+    Alert,
+    Animated,
+    AsyncStorage,
+    Platform,
+    StyleSheet,
+    Text, TouchableOpacity,
+    Vibration,
+    View,
+} from 'react-native';
+import {
+    sendSMSSentNotification,
+    sendSOSTriggerNotification,
 } from '../utils/notificationHelper';
+import { callEmergency, getCurrentLocation, sendSOSMessages } from '../utils/sosHelper';
 
 const SHAKE_THRESHOLD = 1.8; // G-force threshold to trigger shake
 
@@ -33,7 +39,7 @@ export default function HomeScreen({ navigation }) {
   }, []);
 
   // Shake detection
-  useEffect(() => {
+  useEffect(() => {    if (Platform.OS === 'web') return;
     let lastMagnitude = 0;
     Accelerometer.setUpdateInterval(200);
     const sub = Accelerometer.addListener(({ x, y, z }) => {

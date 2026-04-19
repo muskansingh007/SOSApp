@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
     Alert,
     Animated,
+    Platform,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -54,6 +55,8 @@ export default function HomeScreen() {
 
   // Shake detection
   useEffect(() => {
+    if (Platform.OS === "web") return;
+
     let lastMagnitude = 0;
     Accelerometer.setUpdateInterval(200);
     const sub = Accelerometer.addListener(({ x, y, z }) => {
