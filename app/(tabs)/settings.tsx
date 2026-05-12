@@ -1,4 +1,3 @@
-import FakeCallModal from "@/components/modals/FakeCallModal";
 import SafeCheckInModal from "@/components/modals/SafeCheckInModal";
 import WalkHomeModal from "@/components/modals/WalkHomeModal";
 import { ThemedAlert, useThemedAlert } from "@/components/ThemedAlert";
@@ -28,10 +27,8 @@ interface SettingsState {
   includeLocationLink: boolean;
   autoAudioRecording: boolean;
   autoVideoRecording: boolean;
-  uploadToCloud: boolean;
   notificationsEnabled: boolean;
   soundEnabled: boolean;
-  language: "en" | "hi" | "gu";
 }
 
 const DEFAULTS: SettingsState = {
@@ -43,10 +40,8 @@ const DEFAULTS: SettingsState = {
   includeLocationLink: true,
   autoAudioRecording: false,
   autoVideoRecording: false,
-  uploadToCloud: false,
   notificationsEnabled: true,
   soundEnabled: true,
-  language: "en",
 };
 
 function SectionHeader({ label, C }: { label: string; C: any }) {
@@ -132,6 +127,47 @@ function SOSMessageModal({ visible, value, onSave, onClose, C }: {
   );
 }
 
+function FakeCallNameModal({ visible, value, onSave, onClose, C }: {
+  visible: boolean; value: string; onSave: (v: string) => void; onClose: () => void; C: any;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const SUGGESTIONS = ["Mom", "Dad", "Boss", "Doctor", "Friend", "Sister"];
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={styles.msgOverlay}>
+        <View style={[styles.msgCard, { backgroundColor: C.bgSecondary, borderColor: C.cardBorder }]}>
+          <Text style={[styles.msgTitle, { color: C.textPrimary }]}>Fake Call Name</Text>
+          <Text style={[styles.msgSub, { color: C.textMuted }]}>Name shown on the incoming call screen</Text>
+          <TextInput
+            value={draft} onChangeText={setDraft}
+            placeholder="e.g. Mom, Boss, Dr. Mehta..."
+            placeholderTextColor={C.textMuted}
+            autoCapitalize="words"
+            style={[styles.msgInput, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary, minHeight: 48, textAlignVertical: "center" }]}
+          />
+          <View style={styles.chipRow}>
+            {SUGGESTIONS.map((s) => (
+              <TouchableOpacity key={s} onPress={() => setDraft(s)}
+                style={[styles.chip, { backgroundColor: draft === s ? C.goldMid : C.bgTertiary, borderColor: draft === s ? C.gold : C.border }]}>
+                <Text style={[styles.chipTxt, { color: draft === s ? C.goldText : C.textMuted }]}>{s}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.msgBtns}>
+            <TouchableOpacity onPress={onClose} style={[styles.msgBtn, { backgroundColor: C.bgTertiary, borderColor: C.border }]}>
+              <Text style={[styles.msgBtnTxt, { color: C.textMuted }]}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { onSave(draft.trim() || "Mom"); onClose(); }} style={[styles.msgBtn, { backgroundColor: C.gold }]}>
+              <Text style={[styles.msgBtnTxt, { color: C.bg }]}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function SettingsScreen() {
   const { theme: C, isDark, toggleTheme } = useTheme();
   const router = useRouter();
@@ -139,14 +175,17 @@ export default function SettingsScreen() {
   const { visible, config, showAlert, hideAlert } = useThemedAlert();
   const [settings, setSettings] = useState<SettingsState>(DEFAULTS);
   const [sosModalOpen, setSosModalOpen] = useState(false);
-  const [fakeCallOpen, setFakeCallOpen] = useState(false);
+  const [fakeCallNameOpen, setFakeCallNameOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [walkHomeOpen, setWalkHomeOpen] = useState(false);
-  const [callerName] = useState("Mom");
+  const [callerName, setCallerName] = useState("Mom");
 
   useEffect(() => {
     AsyncStorage.getItem("settings").then((v) => {
       if (v) setSettings({ ...DEFAULTS, ...JSON.parse(v) });
+    });
+    AsyncStorage.getItem("fake_caller_name").then((v) => {
+      if (v) setCallerName(v);
     });
   }, []);
 
@@ -154,6 +193,11 @@ export default function SettingsScreen() {
     const next = { ...settings, ...patch };
     setSettings(next);
     await AsyncStorage.setItem("settings", JSON.stringify(next));
+  }
+
+  async function saveCallerName(name: string) {
+    setCallerName(name);
+    await AsyncStorage.setItem("fake_caller_name", name);
   }
 
   function handleTestSOS() {
@@ -263,14 +307,14 @@ export default function SettingsScreen() {
           <SettingRow C={C} label="Auto Video Recording" sub="Record video when SOS triggers" isLast={false}>
             <Toggle value={settings.autoVideoRecording} onChange={(v) => save({ autoVideoRecording: v })} C={C} />
           </SettingRow>
-          <SettingRow C={C} label="Upload to Cloud" sub="Auto-upload recordings on SOS" isLast>
-            <Toggle value={settings.uploadToCloud} onChange={(v) => save({ uploadToCloud: v })} C={C} />
+          <SettingRow C={C} label="Recordings" sub="View & play saved recordings" onPress={() => router.push("/recordings" as any)} isLast>
+            <Text style={[styles.arrow, { color: C.textDim }]}>›</Text>
           </SettingRow>
         </SettingCard>
 
         <SectionHeader label="FEATURES" C={C} />
         <SettingCard>
-          <SettingRow C={C} label="Fake Call" sub="Caller name & settings" onPress={() => setFakeCallOpen(true)} isLast={false}>
+          <SettingRow C={C} label="Fake Call" sub={`Caller: ${callerName}`} onPress={() => setFakeCallNameOpen(true)} isLast={false}>
             <Text style={[styles.arrow, { color: C.textDim }]}>›</Text>
           </SettingRow>
           <SettingRow C={C} label="Safe Check-In" sub="Timer & alert settings" onPress={() => setCheckInOpen(true)} isLast={false}>
@@ -293,12 +337,8 @@ export default function SettingsScreen() {
 
         <SectionHeader label="DISPLAY" C={C} />
         <SettingCard>
-          <SettingRow C={C} label="Dark Mode" sub={isDark ? "Currently dark" : "Currently light"} isLast={false}>
+          <SettingRow C={C} label="Dark Mode" sub={isDark ? "Currently dark" : "Currently light"} isLast>
             <Toggle value={isDark} onChange={toggleTheme} C={C} />
-          </SettingRow>
-          <SettingRow C={C} label="Language" sub="App display language" isLast>
-            <ChipSelector options={[{ label: "EN", value: "en" }, { label: "HI", value: "hi" }, { label: "GU", value: "gu" }]}
-              value={settings.language} onChange={(v) => save({ language: v })} C={C} />
           </SettingRow>
         </SettingCard>
 
@@ -334,10 +374,10 @@ export default function SettingsScreen() {
 
       <SOSMessageModal visible={sosModalOpen} value={settings.sosMessage}
         onSave={(v) => save({ sosMessage: v })} onClose={() => setSosModalOpen(false)} C={C} />
-      <FakeCallModal visible={fakeCallOpen} onClose={() => setFakeCallOpen(false)} callerName={callerName} />
+      <FakeCallNameModal visible={fakeCallNameOpen} value={callerName}
+        onSave={saveCallerName} onClose={() => setFakeCallNameOpen(false)} C={C} />
       <SafeCheckInModal visible={checkInOpen} onClose={() => setCheckInOpen(false)} />
       <WalkHomeModal visible={walkHomeOpen} onClose={() => setWalkHomeOpen(false)} />
-
       <ThemedAlert visible={visible} title={config.title} message={config.message}
         buttons={config.buttons} C={C} onClose={hideAlert} />
     </View>
@@ -356,7 +396,7 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 13, fontWeight: "700" },
   rowSub: { fontSize: 10, fontWeight: "500", marginTop: 1 },
   arrow: { fontSize: 20, fontWeight: "300" },
-  chipRow: { flexDirection: "row", gap: 6 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   chip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, borderWidth: 1 },
   chipTxt: { fontSize: 10, fontWeight: "700" },
   testBadge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12, borderWidth: 1 },

@@ -136,7 +136,7 @@ export async function sendSOSCancelledNotification() {
 
 export function setupNotificationResponseHandler(navigationRef) {
   const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-    const { type, mapsLink } = response.notification.request.content.data || {};
+    const { type } = response.notification.request.content.data || {};
     if ((type === 'sos_triggered' || type === 'location_update') && navigationRef?.current) {
       // Navigate back to Alert screen if user taps the notification
       navigationRef.current.navigate('Alert');
