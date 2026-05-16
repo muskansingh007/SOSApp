@@ -1,4 +1,5 @@
 import { useTheme } from "@/context/ThemeContext";
+import { getFeedbackSettings } from "@/utils/appSettings";
 import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -186,6 +187,8 @@ export default function FakeCallScreen() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const durationRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hapticIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedbackRef = useRef({ notificationsEnabled: true, soundEnabled: true });
 
   useEffect(() => {
     // Load saved caller name
@@ -246,6 +249,9 @@ export default function FakeCallScreen() {
 
   async function beginRinging() {
     setCallState("ringing");
+    const feedback = await getFeedbackSettings();
+    feedbackRef.current = feedback;
+    if (!feedback.soundEnabled) return;
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
     try {
@@ -259,34 +265,42 @@ export default function FakeCallScreen() {
     } catch {}
 
     // Haptic pulse while ringing
-    const hapticInterval = setInterval(async () => {
+    hapticIntervalRef.current = setInterval(async () => {
       if (callState === "ringing") {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       } else {
-        clearInterval(hapticInterval);
+        if (hapticIntervalRef.current) clearInterval(hapticIntervalRef.current);
+        hapticIntervalRef.current = null;
       }
     }, 1200);
   }
 
   async function handleAnswer() {
     await stopSound();
+    stopHaptics();
     setCallState("active");
     setCallDuration(0);
     durationRef.current = setInterval(() => {
       setCallDuration((d) => d + 1);
     }, 1000);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
   }
 
   async function handleDecline() {
     await stopSound();
+    stopHaptics();
     setCallState("ended");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
     setTimeout(() => router.back(), 1000);
   }
 
   async function handleEndCall() {
     if (durationRef.current) clearInterval(durationRef.current);
+    stopHaptics();
     setCallState("ended");
     setTimeout(() => router.back(), 1000);
   }
@@ -302,7 +316,15 @@ export default function FakeCallScreen() {
   function cleanup() {
     if (countdownRef.current) clearInterval(countdownRef.current);
     if (durationRef.current) clearInterval(durationRef.current);
+    stopHaptics();
     stopSound();
+  }
+
+  function stopHaptics() {
+    if (hapticIntervalRef.current) {
+      clearInterval(hapticIntervalRef.current);
+      hapticIntervalRef.current = null;
+    }
   }
 
   function handleCancelCountdown() {

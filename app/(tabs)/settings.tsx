@@ -22,7 +22,6 @@ interface SettingsState {
   sosTriggerMethod: "hold" | "shake" | "both";
   countdownDuration: number;
   autoCallContacts: boolean;
-  shakeSensitivity: "low" | "medium" | "high";
   sosMessage: string;
   includeLocationLink: boolean;
   autoAudioRecording: boolean;
@@ -35,7 +34,6 @@ const DEFAULTS: SettingsState = {
   sosTriggerMethod: "hold",
   countdownDuration: 3,
   autoCallContacts: true,
-  shakeSensitivity: "medium",
   sosMessage: "🆘 I need help! This is an emergency.",
   includeLocationLink: true,
   autoAudioRecording: false,
@@ -90,7 +88,10 @@ function ChipSelector({ options, value, onChange, C }: {
     <View style={styles.chipRow}>
       {options.map((o) => (
         <TouchableOpacity key={o.value} onPress={() => onChange(o.value)}
-          style={[styles.chip, { backgroundColor: value === o.value ? C.goldMid : C.bgTertiary, borderColor: value === o.value ? C.gold : C.border }]}>
+          style={[styles.chip, {
+            backgroundColor: value === o.value ? C.goldMid : C.bgTertiary,
+            borderColor: value === o.value ? C.gold : C.border,
+          }]}>
           <Text style={[styles.chipTxt, { color: value === o.value ? C.goldText : C.textMuted }]}>{o.label}</Text>
         </TouchableOpacity>
       ))}
@@ -127,38 +128,64 @@ function SOSMessageModal({ visible, value, onSave, onClose, C }: {
   );
 }
 
+// ─── Fixed FakeCallNameModal ──────────────────────────────────────────────────
+// Suggestions appear ABOVE the text input — no overlap possible
 function FakeCallNameModal({ visible, value, onSave, onClose, C }: {
   visible: boolean; value: string; onSave: (v: string) => void; onClose: () => void; C: any;
 }) {
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  // Refresh draft every time the modal opens with the latest saved name
+  useEffect(() => { if (visible) setDraft(value); }, [visible, value]);
+
   const SUGGESTIONS = ["Mom", "Dad", "Boss", "Doctor", "Friend", "Sister"];
+
   return (
     <Modal visible={visible} transparent animationType="fade">
       <View style={styles.msgOverlay}>
         <View style={[styles.msgCard, { backgroundColor: C.bgSecondary, borderColor: C.cardBorder }]}>
           <Text style={[styles.msgTitle, { color: C.textPrimary }]}>Fake Call Name</Text>
           <Text style={[styles.msgSub, { color: C.textMuted }]}>Name shown on the incoming call screen</Text>
-          <TextInput
-            value={draft} onChangeText={setDraft}
-            placeholder="e.g. Mom, Boss, Dr. Mehta..."
-            placeholderTextColor={C.textMuted}
-            autoCapitalize="words"
-            style={[styles.msgInput, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary, minHeight: 48, textAlignVertical: "center" }]}
-          />
-          <View style={styles.chipRow}>
+
+          {/* Quick pick chips — above the input, clearly separated */}
+          <Text style={[styles.pickLabel, { color: C.textDim }]}>QUICK PICK</Text>
+          <View style={styles.suggRow}>
             {SUGGESTIONS.map((s) => (
-              <TouchableOpacity key={s} onPress={() => setDraft(s)}
-                style={[styles.chip, { backgroundColor: draft === s ? C.goldMid : C.bgTertiary, borderColor: draft === s ? C.gold : C.border }]}>
-                <Text style={[styles.chipTxt, { color: draft === s ? C.goldText : C.textMuted }]}>{s}</Text>
+              <TouchableOpacity
+                key={s}
+                onPress={() => setDraft(s)}
+                style={[styles.suggChip, {
+                  backgroundColor: draft === s ? C.goldMid : C.bgTertiary,
+                  borderColor:     draft === s ? C.gold   : C.border,
+                }]}
+              >
+                <Text style={[styles.suggChipTxt, { color: draft === s ? C.goldText : C.textMuted }]}>{s}</Text>
               </TouchableOpacity>
             ))}
           </View>
+
+          {/* Text input below chips — always visible, never covered */}
+          <Text style={[styles.pickLabel, { color: C.textDim, marginTop: 14 }]}>OR TYPE A NAME</Text>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="e.g. Dr. Mehta, Rahul..."
+            placeholderTextColor={C.textDim}
+            autoCapitalize="words"
+            style={[styles.nameInput, {
+              backgroundColor: C.inputBg,
+              borderColor:     C.inputBorder,
+              color:           C.textPrimary,
+            }]}
+          />
+
           <View style={styles.msgBtns}>
             <TouchableOpacity onPress={onClose} style={[styles.msgBtn, { backgroundColor: C.bgTertiary, borderColor: C.border }]}>
               <Text style={[styles.msgBtnTxt, { color: C.textMuted }]}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { onSave(draft.trim() || "Mom"); onClose(); }} style={[styles.msgBtn, { backgroundColor: C.gold }]}>
+            <TouchableOpacity
+              onPress={() => { onSave(draft.trim() || "Mom"); onClose(); }}
+              style={[styles.msgBtn, { backgroundColor: C.gold }]}
+            >
               <Text style={[styles.msgBtnTxt, { color: C.bg }]}>Save</Text>
             </TouchableOpacity>
           </View>
@@ -173,12 +200,12 @@ export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { visible, config, showAlert, hideAlert } = useThemedAlert();
-  const [settings, setSettings] = useState<SettingsState>(DEFAULTS);
-  const [sosModalOpen, setSosModalOpen] = useState(false);
+  const [settings, setSettings]               = useState<SettingsState>(DEFAULTS);
+  const [sosModalOpen, setSosModalOpen]       = useState(false);
   const [fakeCallNameOpen, setFakeCallNameOpen] = useState(false);
-  const [checkInOpen, setCheckInOpen] = useState(false);
-  const [walkHomeOpen, setWalkHomeOpen] = useState(false);
-  const [callerName, setCallerName] = useState("Mom");
+  const [checkInOpen, setCheckInOpen]         = useState(false);
+  const [walkHomeOpen, setWalkHomeOpen]       = useState(false);
+  const [callerName, setCallerName]           = useState("Mom");
 
   useEffect(() => {
     AsyncStorage.getItem("settings").then((v) => {
@@ -203,19 +230,19 @@ export default function SettingsScreen() {
   function handleTestSOS() {
     showAlert({
       title: "Test SOS",
-      message: "This will simulate an SOS trigger. No real alerts will be sent.",
+      message: "This will open the SOS alert screen. No real alerts will be sent.",
       buttons: [
         { label: "Cancel", onPress: () => {} },
         {
           label: "Run Test", primary: true,
           onPress: () => {
-            setTimeout(() => {
-              showAlert({
-                title: "✓ Test Complete",
-                message: "SOS trigger works correctly. No alerts were sent.",
-                buttons: [{ label: "OK", onPress: () => {}, primary: true }],
-              });
-            }, 200);
+            router.push({
+              pathname: "/alert",
+              params: {
+                contacts: JSON.stringify([{ name: "Test Contact", phone: "0000000000" }]),
+                isTest: "true",
+              },
+            });
           },
         },
       ],
@@ -231,7 +258,10 @@ export default function SettingsScreen() {
         {
           label: "Log Out", destructive: true,
           onPress: async () => {
-            await AsyncStorage.multiRemove(["contacts", "settings", "profile", "trusted_circle", "fake_caller_name", "theme_mode", "onboarding_complete"]);
+            await AsyncStorage.multiRemove([
+              "contacts", "settings", "profile", "trusted_circle",
+              "fake_caller_name", "theme_mode", "onboarding_complete", "sos_recordings",
+            ]);
             router.replace("/onboarding");
           },
         },
@@ -270,19 +300,17 @@ export default function SettingsScreen() {
         <SectionHeader label="SOS TRIGGER" C={C} />
         <SettingCard>
           <SettingRow C={C} label="Trigger Method" sub="How SOS is activated" isLast={false}>
-            <ChipSelector options={[{ label: "Hold", value: "hold" }, { label: "Shake", value: "shake" }, { label: "Both", value: "both" }]}
+            <ChipSelector
+              options={[{ label: "Hold", value: "hold" }, { label: "Shake", value: "shake" }, { label: "Both", value: "both" }]}
               value={settings.sosTriggerMethod} onChange={(v) => save({ sosTriggerMethod: v })} C={C} />
           </SettingRow>
           <SettingRow C={C} label="Countdown Duration" sub={`${settings.countdownDuration}s before SOS fires`} isLast={false}>
-            <ChipSelector options={[{ label: "1s", value: "1" }, { label: "3s", value: "3" }, { label: "5s", value: "5" }]}
+            <ChipSelector
+              options={[{ label: "1s", value: "1" }, { label: "3s", value: "3" }, { label: "5s", value: "5" }]}
               value={String(settings.countdownDuration)} onChange={(v) => save({ countdownDuration: Number(v) })} C={C} />
           </SettingRow>
           <SettingRow C={C} label="Auto Call Contacts" sub="Call first contact after SOS" isLast={false}>
             <Toggle value={settings.autoCallContacts} onChange={(v) => save({ autoCallContacts: v })} C={C} />
-          </SettingRow>
-          <SettingRow C={C} label="Shake Sensitivity" sub="How hard to shake to trigger" isLast={false}>
-            <ChipSelector options={[{ label: "Low", value: "low" }, { label: "Med", value: "medium" }, { label: "High", value: "high" }]}
-              value={settings.shakeSensitivity} onChange={(v) => save({ shakeSensitivity: v })} C={C} />
           </SettingRow>
           <SettingRow C={C} label="SOS Message"
             sub={settings.sosMessage.length > 32 ? settings.sosMessage.slice(0, 32) + "…" : settings.sosMessage}
@@ -292,7 +320,7 @@ export default function SettingsScreen() {
           <SettingRow C={C} label="Include Location Link" sub="Add GPS link to SOS message" isLast={false}>
             <Toggle value={settings.includeLocationLink} onChange={(v) => save({ includeLocationLink: v })} C={C} />
           </SettingRow>
-          <SettingRow C={C} label="Test SOS" sub="Dry run — no real alerts sent" onPress={handleTestSOS} isLast>
+          <SettingRow C={C} label="Test SOS" sub="Dry run — opens alert screen" onPress={handleTestSOS} isLast>
             <View style={[styles.testBadge, { backgroundColor: C.goldMid, borderColor: C.gold }]}>
               <Text style={[styles.testBadgeTxt, { color: C.goldText }]}>RUN</Text>
             </View>
@@ -402,6 +430,8 @@ const styles = StyleSheet.create({
   testBadge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12, borderWidth: 1 },
   testBadgeTxt: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },
   version: { textAlign: "center", fontSize: 9, letterSpacing: 1.5, marginTop: 28, fontWeight: "600" },
+
+  // Modals
   msgOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center", padding: 24 },
   msgCard: { width: "100%", maxWidth: 340, borderRadius: 20, borderWidth: 1, padding: 24 },
   msgTitle: { fontSize: 16, fontWeight: "900", marginBottom: 4 },
@@ -411,4 +441,11 @@ const styles = StyleSheet.create({
   msgBtns: { flexDirection: "row", gap: 10, marginTop: 16 },
   msgBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: "center", borderWidth: 1 },
   msgBtnTxt: { fontSize: 13, fontWeight: "800" },
+
+  // FakeCallNameModal specific
+  pickLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 1.5, marginBottom: 8 },
+  suggRow:   { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
+  suggChip:  { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1 },
+  suggChipTxt: { fontSize: 12, fontWeight: "700" },
+  nameInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, fontWeight: "600" },
 });

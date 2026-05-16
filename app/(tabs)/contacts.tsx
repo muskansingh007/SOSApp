@@ -1,5 +1,6 @@
 import { ThemedAlert, useThemedAlert } from "@/components/ThemedAlert";
 import { useTheme } from "@/context/ThemeContext";
+import { validatePhoneNumber } from "@/utils/validation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
@@ -50,8 +51,9 @@ function ContactForm({
       onValidationError("Name Required", "Please enter the contact's name.");
       return;
     }
-    if (!phone.trim() || phone.replace(/\D/g, "").length < 7) {
-      onValidationError("Invalid Phone", "Please enter a valid phone number.");
+    const phoneError = validatePhoneNumber(phone);
+    if (phoneError) {
+      onValidationError("Invalid Phone Number", phoneError);
       return;
     }
     onSave({ name: name.trim(), phone: phone.trim(), relation });
@@ -68,8 +70,19 @@ function ContactForm({
 
       <Text style={[styles.formLabel, { color: C.textMuted }]}>PHONE NUMBER</Text>
       <TextInput value={phone} onChangeText={setPhone} placeholder="+91 98765 43210"
+        onEndEditing={() => {
+          const phoneError = validatePhoneNumber(phone);
+          if (phone.trim() && phoneError) onValidationError("Invalid Phone Number", phoneError);
+        }}
         placeholderTextColor={C.textDim} keyboardType="phone-pad"
-        style={[styles.input, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary }]} />
+        style={[styles.input, {
+          backgroundColor: C.inputBg,
+          borderColor: phone && validatePhoneNumber(phone) ? C.red : C.inputBorder,
+          color: C.textPrimary,
+        }]} />
+      {phone.length > 0 && validatePhoneNumber(phone) && (
+        <Text style={[styles.phoneError, { color: C.red }]}>{validatePhoneNumber(phone)}</Text>
+      )}
 
       <Text style={[styles.formLabel, { color: C.textMuted }]}>RELATION</Text>
       <View style={styles.relationGrid}>
@@ -240,11 +253,14 @@ export default function ContactsScreen() {
   }
 
   function handleValidationError(title: string, message: string) {
-    showAlert({
-      title,
-      message,
-      buttons: [{ label: "OK", onPress: () => {}, primary: true }],
-    });
+    Keyboard.dismiss();
+    setTimeout(() => {
+      showAlert({
+        title,
+        message,
+        buttons: [{ label: "OK", onPress: () => {}, primary: true }],
+      });
+    }, 80);
   }
 
   const canAddMore = contacts.length < MAX_CONTACTS;
@@ -354,6 +370,7 @@ const styles = StyleSheet.create({
   formTitle: { fontSize: 14, fontWeight: "900", marginBottom: 4 },
   formLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 1.5, marginBottom: 2 },
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 13, fontWeight: "600", marginBottom: 4 },
+  phoneError: { fontSize: 10, fontWeight: "600", marginTop: -2, marginBottom: 4 },
   relationGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   relationChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, borderWidth: 1 },
   relationChipTxt: { fontSize: 11, fontWeight: "700" },

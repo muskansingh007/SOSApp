@@ -1,4 +1,5 @@
 import { useTheme } from "@/context/ThemeContext";
+import { getFeedbackSettings } from "@/utils/appSettings";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
@@ -32,6 +33,7 @@ export default function FakeCallModal({ visible, onClose, callerName: propCaller
   const pulseLoop        = useRef<Animated.CompositeAnimation | null>(null);
   const durationRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const hapticIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedbackRef = useRef({ notificationsEnabled: true, soundEnabled: true });
 
   const startPulse = useCallback(() => {
     pulseAnim.setValue(1);
@@ -61,6 +63,9 @@ export default function FakeCallModal({ visible, onClose, callerName: propCaller
   }, []);
 
   const startRinging = useCallback(async () => {
+    const feedback = await getFeedbackSettings();
+    feedbackRef.current = feedback;
+    if (!feedback.soundEnabled) return;
     try {
       await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
       const { sound } = await Audio.Sound.createAsync(
@@ -70,7 +75,7 @@ export default function FakeCallModal({ visible, onClose, callerName: propCaller
       soundRef.current = sound;
       await sound.playAsync();
     } catch {}
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     hapticIntervalRef.current = setInterval(async () => {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }, 1200);
@@ -124,21 +129,27 @@ export default function FakeCallModal({ visible, onClose, callerName: propCaller
   async function handleAnswer() {
     stopHaptics();
     await stopSound();
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
     setCallState("active");
   }
 
   async function handleDecline() {
     stopHaptics();
     await stopSound();
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
     setCallState("ended");
   }
 
   async function handleHangUp() {
     stopHaptics();
     await stopSound();
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
     setCallState("ended");
   }
 

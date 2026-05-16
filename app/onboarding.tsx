@@ -1,10 +1,12 @@
 import { useTheme } from "@/context/ThemeContext";
+import { ThemedAlert, useThemedAlert } from "@/components/ThemedAlert";
+import { validatePhoneNumber } from "@/utils/validation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-  Alert,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ScrollView,
   StatusBar,
@@ -127,12 +129,14 @@ function NameStep({
   setName,
   onNext,
   onBack,
+  onValidationError,
 }: {
   C: any;
   name: string;
   setName: (v: string) => void;
   onNext: () => void;
   onBack: () => void;
+  onValidationError: (title: string, message: string) => void;
 }) {
   return (
     <View style={styles.stepContainer}>
@@ -189,7 +193,7 @@ function NameStep({
         <TouchableOpacity
           onPress={() => {
             if (!name.trim()) {
-              Alert.alert("Name Required", "Please enter your name to continue.");
+              onValidationError("Name Required", "Please enter your name to continue.");
               return;
             }
             onNext();
@@ -230,6 +234,7 @@ function ContactStep({
   onNext,
   onBack,
   onSkip,
+  onValidationError,
 }: {
   C: any;
   contactName: string;
@@ -239,6 +244,7 @@ function ContactStep({
   onNext: () => void;
   onBack: () => void;
   onSkip: () => void;
+  onValidationError: (title: string, message: string) => void;
 }) {
   return (
     <View style={styles.stepContainer}>
@@ -281,6 +287,10 @@ function ContactStep({
         <TextInput
           value={contactPhone}
           onChangeText={setContactPhone}
+          onEndEditing={() => {
+            const phoneError = validatePhoneNumber(contactPhone);
+            if (contactPhone.trim() && phoneError) onValidationError("Invalid Phone Number", phoneError);
+          }}
           placeholder="+91 98765 43210"
           placeholderTextColor={C.textDim}
           keyboardType="phone-pad"
@@ -288,7 +298,9 @@ function ContactStep({
             styles.input,
             {
               backgroundColor: C.inputBg,
-              borderColor: contactPhone.trim() ? C.gold : C.inputBorder,
+              borderColor: contactPhone.trim()
+                ? validatePhoneNumber(contactPhone) ? C.red : C.gold
+                : C.inputBorder,
               color: C.textPrimary,
             },
           ]}
@@ -323,14 +335,15 @@ function ContactStep({
         <TouchableOpacity
           onPress={() => {
             if (!contactName.trim() || !contactPhone.trim()) {
-              Alert.alert(
+              onValidationError(
                 "Missing Info",
                 "Please enter both name and phone number."
               );
               return;
             }
-            if (contactPhone.replace(/\D/g, "").length < 7) {
-              Alert.alert("Invalid Phone", "Please enter a valid phone number.");
+            const phoneError = validatePhoneNumber(contactPhone);
+            if (phoneError) {
+              onValidationError("Invalid Phone Number", phoneError);
               return;
             }
             onNext();
@@ -494,6 +507,7 @@ export default function OnboardingScreen() {
   const { theme: C } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { visible, config, showAlert, hideAlert } = useThemedAlert();
 
   const [stepIndex, setStepIndex] = useState(0);
   const [name, setName] = useState("");
@@ -508,6 +522,13 @@ export default function OnboardingScreen() {
 
   function goBack() {
     if (stepIndex > 0) setStepIndex((i) => i - 1);
+  }
+
+  function handleValidationError(title: string, message: string) {
+    Keyboard.dismiss();
+    setTimeout(() => {
+      showAlert({ title, message, buttons: [{ label: "OK", onPress: () => {}, primary: true }] });
+    }, 80);
   }
 
   async function handleFinish() {
@@ -593,6 +614,7 @@ export default function OnboardingScreen() {
               setName={setName}
               onNext={goNext}
               onBack={goBack}
+              onValidationError={handleValidationError}
             />
           )}
 
@@ -606,6 +628,7 @@ export default function OnboardingScreen() {
               onNext={goNext}
               onBack={goBack}
               onSkip={handleSkipContact}
+              onValidationError={handleValidationError}
             />
           )}
 
@@ -618,6 +641,14 @@ export default function OnboardingScreen() {
             />
           )}
         </ScrollView>
+        <ThemedAlert
+          visible={visible}
+          title={config.title}
+          message={config.message}
+          buttons={config.buttons}
+          C={C}
+          onClose={hideAlert}
+        />
       </View>
     </KeyboardAvoidingView>
   );

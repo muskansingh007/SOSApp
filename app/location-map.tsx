@@ -1,6 +1,7 @@
 import { useTheme } from "@/context/ThemeContext";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
+import { Circle, MapView, Marker } from "expo-maps";
 import { useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -128,13 +129,8 @@ export default function LocationMapScreen() {
   const watchRef = useRef<Location.LocationSubscription | null>(null);
 
   useEffect(() => {
-    // Check if expo-maps is available
-    try {
-      require('expo-maps');
-      setMapsAvailable(true);
-    } catch {
-      setMapsAvailable(false);
-    }
+    // expo-maps is available (imported at top)
+    setMapsAvailable(true);
   }, []);
 
   useEffect(() => {
@@ -301,8 +297,7 @@ export default function LocationMapScreen() {
     );
   }
 
-  // Dynamically import maps components
-  const { MapView, Circle, Marker } = require('expo-maps');
+  // Maps components already imported at top
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>

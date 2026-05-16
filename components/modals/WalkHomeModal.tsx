@@ -1,4 +1,7 @@
 import { useTheme } from "@/context/ThemeContext";
+import { getFeedbackSettings } from "@/utils/appSettings";
+import { sendLocalNotification } from "@/utils/notifications";
+import { playEmergencySound, playSuccessSound } from "@/utils/soundEffects";
 import * as Haptics from "expo-haptics";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as Location from "expo-location";
@@ -47,6 +50,7 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
   const progressRef = useRef<Animated.CompositeAnimation | null>(null);
   const keepAwakeActiveRef = useRef(false);
   const cleanupRequestedRef = useRef(false);
+  const feedbackRef = useRef({ notificationsEnabled: true, soundEnabled: true });
 
   const DURATIONS = [5, 10, 15, 20, 30, 45, 60];
 
@@ -59,6 +63,7 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
         useNativeDriver: true,
       }).start();
       loadContacts();
+      loadFeedbackSettings();
     } else {
       fadeAnim.setValue(0);
       cleanup();
@@ -67,6 +72,22 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
     // This effect intentionally follows modal visibility only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  async function loadFeedbackSettings() {
+    feedbackRef.current = await getFeedbackSettings();
+  }
+
+  async function playNotificationFeedback(type: Haptics.NotificationFeedbackType) {
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(type);
+    }
+  }
+
+  async function playImpactFeedback(style: Haptics.ImpactFeedbackStyle) {
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.impactAsync(style);
+    }
+  }
 
   // ── Pulse for alert state ──
   useEffect(() => {
@@ -135,7 +156,9 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
         msg
       );
     }
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playNotificationFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
+    void sendLocalNotification("Walk Home Started", `Expected arrival in ${durationMinutes} minutes.`);
   }
 
   function startTimer(seconds: number) {
@@ -178,14 +201,16 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
     setTimeLeft(newTotal);
     startTimer(newTotal);
     startProgress(newTotal);
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await playImpactFeedback(Haptics.ImpactFeedbackStyle.Light);
+    void sendLocalNotification("Walk Home Extended", "Added 10 minutes to your walk timer.");
   }
 
   async function markArrived() {
     stopTimer();
     cleanup();
     setWalkState("arrived");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playNotificationFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
 
     const msg = buildArrivalMessage();
     const isAvailable = await SMS.isAvailableAsync();
@@ -195,13 +220,15 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
         msg
       );
     }
+    void sendLocalNotification("Arrived Safely", "Walk Home ended and your contacts were updated.");
 
     setTimeout(() => onClose(), 2500);
   }
 
   async function triggerAlert() {
     setWalkState("alert");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    await playNotificationFeedback(Haptics.NotificationFeedbackType.Error);
+    void playEmergencySound();
 
     const msg = buildAlertMessage();
     const isAvailable = await SMS.isAvailableAsync();
@@ -211,13 +238,16 @@ export default function WalkHomeModal({ visible, onClose }: Props) {
         msg
       );
     }
+    void sendLocalNotification("Walk Home Alert", "Your emergency contacts were alerted.");
   }
 
   async function imSafe() {
     stopTimer();
     cleanup();
     setWalkState("arrived");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playNotificationFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
+    void sendLocalNotification("Walk Home Cancelled", "You marked yourself safe.");
     setTimeout(() => onClose(), 2000);
   }
 

@@ -1,13 +1,12 @@
 import { ThemedAlert, useThemedAlert } from "@/components/ThemedAlert";
 import { useTheme } from "@/context/ThemeContext";
+import { validatePhoneNumber } from "@/utils/validation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Animated,
   Keyboard,
   KeyboardAvoidingView,
-  PanResponder,
   Platform,
   ScrollView,
   StatusBar,
@@ -17,6 +16,14 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface Contact {
@@ -26,20 +33,12 @@ interface Contact {
   relation: string;
 }
 
-const RELATIONS     = ["Parent", "Sibling", "Partner", "Friend", "Colleague", "Other"];
+const RELATIONS = ["Parent", "Sibling", "Partner", "Friend", "Colleague", "Other"];
 const ACCENT_COLORS = ["gold", "blue", "green", "purple", "red"] as const;
-const ACCENT_BGS    = ["goldMid", "blueDim", "greenDim", "purpleDim", "redDim"] as const;
-const MAX_CONTACTS  = 5;
-const CARD_HEIGHT   = 130;
-
-// ─── Phone validation ─────────────────────────────────────────────────────────
-function validatePhone(phone: string): string | null {
-  const digits = phone.replace(/\D/g, "");
-  if (!phone.trim()) return "Phone number is required.";
-  if (digits.length < 7) return "Please enter a valid phone number (at least 7 digits).";
-  if (digits.length > 15) return "Phone number is too long.";
-  return null; // valid
-}
+const ACCENT_BGS = ["goldMid", "blueDim", "greenDim", "purpleDim", "redDim"] as const;
+const MAX_CONTACTS = 5;
+const CARD_HEIGHT = 142; // approximate card height + gap
+const SPRING_CONFIG = { damping: 20, stiffness: 200, mass: 0.8 };
 
 // ─── Contact Form ─────────────────────────────────────────────────────────────
 function ContactForm({ C, initial, onSave, onCancel, isEdit, onValidationError }: {
@@ -49,8 +48,8 @@ function ContactForm({ C, initial, onSave, onCancel, isEdit, onValidationError }
   isEdit?: boolean;
   onValidationError: (title: string, message: string) => void;
 }) {
-  const [name, setName]         = useState(initial?.name ?? "");
-  const [phone, setPhone]       = useState(initial?.phone ?? "");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [phone, setPhone] = useState(initial?.phone ?? "");
   const [relation, setRelation] = useState(initial?.relation ?? "Friend");
 
   function handleSave() {
@@ -58,7 +57,7 @@ function ContactForm({ C, initial, onSave, onCancel, isEdit, onValidationError }
       onValidationError("Name Required", "Please enter the contact's name.");
       return;
     }
-    const phoneError = validatePhone(phone);
+    const phoneError = validatePhoneNumber(phone);
     if (phoneError) {
       onValidationError("Invalid Phone Number", phoneError);
       return;
@@ -77,14 +76,18 @@ function ContactForm({ C, initial, onSave, onCancel, isEdit, onValidationError }
 
       <Text style={[styles.formLabel, { color: C.textMuted }]}>PHONE NUMBER</Text>
       <TextInput value={phone} onChangeText={setPhone} placeholder="+91 98765 43210"
+        onEndEditing={() => {
+          const phoneError = validatePhoneNumber(phone);
+          if (phone.trim() && phoneError) onValidationError("Invalid Phone Number", phoneError);
+        }}
         placeholderTextColor={C.textDim} keyboardType="phone-pad"
         style={[styles.input, {
           backgroundColor: C.inputBg,
-          borderColor: phone && validatePhone(phone) ? C.red : C.inputBorder,
+          borderColor: phone && validatePhoneNumber(phone) ? C.red : C.inputBorder,
           color: C.textPrimary,
         }]} />
-      {phone.length > 0 && validatePhone(phone) && (
-        <Text style={[styles.phoneError, { color: C.red }]}>{validatePhone(phone)}</Text>
+      {phone.length > 0 && validatePhoneNumber(phone) && (
+        <Text style={[styles.phoneError, { color: C.red }]}>{validatePhoneNumber(phone)}</Text>
       )}
 
       <Text style={[styles.formLabel, { color: C.textMuted }]}>RELATION</Text>
@@ -113,40 +116,86 @@ function ContactForm({ C, initial, onSave, onCancel, isEdit, onValidationError }
 }
 
 // ─── Draggable Contact Card ───────────────────────────────────────────────────
-function ContactCard({ contact, index, onEdit, onDelete, C, totalContacts, onDragEnd }: {
+function DraggableContactCard({
+  contact, index, onEdit, onDelete, C, totalContacts, onReorder, isDraggingAny, onDragStateChange,
+}: {
   contact: Contact; index: number; onEdit: () => void; onDelete: () => void;
-  C: any; totalContacts: number; onDragEnd: (from: number, to: number) => void;
+  C: any; totalContacts: number;
+  onReorder: (fromIndex: number, toIndex: number) => void;
+  isDraggingAny?: boolean;
+  onDragStateChange?: (isDragging: boolean) => void;
 }) {
-  const color        = C[ACCENT_COLORS[index % ACCENT_COLORS.length]];
-  const bg           = C[ACCENT_BGS[index % ACCENT_BGS.length]];
+  const color = C[ACCENT_COLORS[index % ACCENT_COLORS.length]];
+  const bg = C[ACCENT_BGS[index % ACCENT_BGS.length]];
   const ORDER_LABELS = ["1st", "2nd", "3rd", "4th", "5th"];
-  const dragY        = useRef(new Animated.Value(0)).current;
 
-  const onDragEndRef = useRef(onDragEnd);
-  useEffect(() => { onDragEndRef.current = onDragEnd; }, [onDragEnd]);
-  const indexRef = useRef(index);
-  const totalRef = useRef(totalContacts);
-  useEffect(() => { indexRef.current = index; }, [index]);
-  useEffect(() => { totalRef.current = totalContacts; }, [totalContacts]);
+  const translateY = useSharedValue(0);
+  const isDragging = useSharedValue(false);
+  const dragScale = useSharedValue(1);
+  const dragElevation = useSharedValue(0);
+  const dragOpacity = useSharedValue(1);
+  const startIndex = useRef(index);
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dy) > 4 && Math.abs(gs.dy) > Math.abs(gs.dx),
-      onPanResponderGrant: () => { dragY.setValue(0); },
-      onPanResponderMove: (_, gs) => { dragY.setValue(gs.dy); },
-      onPanResponderRelease: (_, gs) => {
-        const moved = Math.round(gs.dy / CARD_HEIGHT);
-        const from  = indexRef.current;
-        const to    = Math.max(0, Math.min(totalRef.current - 1, from + moved));
-        Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
-        if (to !== from) onDragEndRef.current(from, to);
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
-      },
+  // Keep index in sync
+  useEffect(() => {
+    startIndex.current = index;
+  }, [index]);
+
+  const handleReorder = useCallback((from: number, to: number) => {
+    onReorder(from, to);
+  }, [onReorder]);
+
+  const panGesture = Gesture.Pan()
+    .activeOffsetY([-5, 5])
+    .failOffsetX([-20, 20])
+    .onStart(() => {
+      isDragging.value = true;
+      if (onDragStateChange) runOnJS(onDragStateChange)(true);
+      dragScale.value = withSpring(1.06, SPRING_CONFIG);
+      dragElevation.value = withTiming(20, { duration: 200 });
+      dragOpacity.value = withTiming(0.95, { duration: 150 });
     })
-  ).current;
+    .onUpdate((event) => {
+      translateY.value = event.translationY;
+    })
+    .onEnd(() => {
+      const currentIdx = startIndex.current;
+      const movedPositions = Math.round(translateY.value / CARD_HEIGHT);
+      const newIndex = Math.max(0, Math.min(totalContacts - 1, currentIdx + movedPositions));
+
+      if (newIndex !== currentIdx) {
+        runOnJS(handleReorder)(currentIdx, newIndex);
+      }
+
+      translateY.value = withSpring(0, SPRING_CONFIG);
+      isDragging.value = false;
+      if (onDragStateChange) runOnJS(onDragStateChange)(false);
+      dragScale.value = withSpring(1, SPRING_CONFIG);
+      dragElevation.value = withTiming(0, { duration: 200 });
+      dragOpacity.value = withTiming(1, { duration: 200 });
+    })
+    .onFinalize(() => {
+      translateY.value = withSpring(0, SPRING_CONFIG);
+      isDragging.value = false;
+      if (onDragStateChange) runOnJS(onDragStateChange)(false);
+      dragScale.value = withSpring(1, SPRING_CONFIG);
+      dragElevation.value = withTiming(0, { duration: 200 });
+      dragOpacity.value = withTiming(1, { duration: 200 });
+    });
+
+  const animatedCardStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: translateY.value },
+      { scale: dragScale.value },
+    ],
+    opacity: dragOpacity.value,
+    zIndex: isDragging.value ? 1000 : 0,
+    elevation: dragElevation.value,
+    shadowOpacity: isDragging.value ? 0.4 : 0,
+    shadowRadius: isDragging.value ? 16 : 0,
+    shadowOffset: { width: 0, height: isDragging.value ? 12 : 0 },
+    shadowColor: "#000",
+  }));
 
   const initials = contact.name.split(" ").map((w) => w[0]).filter(Boolean).join("").toUpperCase().slice(0, 2);
 
@@ -155,17 +204,23 @@ function ContactCard({ contact, index, onEdit, onDelete, C, totalContacts, onDra
       backgroundColor: C.cardBg,
       borderColor: index === 0 ? C.gold : C.cardBorder,
       borderWidth: index === 0 ? 1.5 : 1,
-      transform: [{ translateY: dragY }],
-    }]}>
+    }, animatedCardStyle]}>
       <View style={[styles.priorityBadge, { backgroundColor: bg, borderColor: color + "55" }]}>
         <Text style={[styles.priorityTxt, { color }]}>{ORDER_LABELS[index]}</Text>
       </View>
       <View style={styles.cardMain}>
-        <View {...panResponder.panHandlers} style={styles.dragHandle}>
-          {[0, 1, 2].map((i) => (
-            <View key={i} style={[styles.dragBar, { backgroundColor: C.textMuted }]} />
-          ))}
-        </View>
+        <GestureDetector gesture={panGesture}>
+          <Animated.View style={styles.dragHandle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <View style={styles.dragIconContainer}>
+              {[0, 1, 2].map((i) => (
+                <View key={i} style={styles.dragDotRow}>
+                  <View style={[styles.dragDot, { backgroundColor: C.textMuted }]} />
+                  <View style={[styles.dragDot, { backgroundColor: C.textMuted }]} />
+                </View>
+              ))}
+            </View>
+          </Animated.View>
+        </GestureDetector>
         <View style={[styles.avatar, { backgroundColor: bg }]}>
           <Text style={[styles.avatarTxt, { color }]}>{initials}</Text>
         </View>
@@ -213,12 +268,13 @@ function EmptyState({ C, onAdd }: { C: any; onAdd: () => void }) {
 
 export default function ContactsScreen() {
   const { theme: C } = useTheme();
-  const router       = useRouter();
-  const insets       = useSafeAreaInsets();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { visible, config, showAlert, hideAlert } = useThemedAlert();
-  const [contacts, setContacts]             = useState<Contact[]>([]);
-  const [showForm, setShowForm]             = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [showForm, setShowForm] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [isDraggingContact, setIsDraggingContact] = useState(false);
 
   useEffect(() => { loadContacts(); }, []);
 
@@ -257,18 +313,22 @@ export default function ContactsScreen() {
     });
   }
 
-  const handleDragEnd = useCallback((from: number, to: number) => {
+  const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
     setContacts((prev) => {
+      if (fromIndex === toIndex) return prev;
       const list = [...prev];
-      const [removed] = list.splice(from, 1);
-      list.splice(to, 0, removed);
+      const [removed] = list.splice(fromIndex, 1);
+      list.splice(toIndex, 0, removed);
       AsyncStorage.setItem("contacts", JSON.stringify(list));
       return list;
     });
   }, []);
 
   function handleValidationError(title: string, message: string) {
-    showAlert({ title, message, buttons: [{ label: "OK", onPress: () => {}, primary: true }] });
+    Keyboard.dismiss();
+    setTimeout(() => {
+      showAlert({ title, message, buttons: [{ label: "OK", onPress: () => {}, primary: true }] });
+    }, 80);
   }
 
   const canAddMore = contacts.length < MAX_CONTACTS;
@@ -290,6 +350,7 @@ export default function ContactsScreen() {
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+          scrollEnabled={!isDraggingContact}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 32 }]}>
 
           <View style={[styles.infoBanner, { backgroundColor: C.goldMid, borderColor: C.gold + "44" }]}>
@@ -302,7 +363,7 @@ export default function ContactsScreen() {
 
           {contacts.length > 1 && (
             <View style={[styles.dragHint, { backgroundColor: C.bgTertiary, borderColor: C.border }]}>
-              <Text style={[styles.dragHintTxt, { color: C.textDim }]}>☰  Drag the handle to reorder priority</Text>
+              <Text style={[styles.dragHintTxt, { color: C.textDim }]}>⠿  Drag the grip handle to reorder priority</Text>
             </View>
           )}
 
@@ -330,11 +391,14 @@ export default function ContactsScreen() {
                 <Text style={[styles.sectionLabel, { color: C.sectionHeader }]}>{`YOUR CONTACTS · ${contacts.length}/${MAX_CONTACTS}`}</Text>
                 <View style={styles.contactsList}>
                   {contacts.map((contact, i) => (
-                    <ContactCard
+                    <DraggableContactCard
                       key={contact.id} contact={contact} index={i} totalContacts={contacts.length}
                       onEdit={() => { setShowForm(false); setEditingContact(contact); }}
                       onDelete={() => handleDelete(contact.id)}
-                      onDragEnd={handleDragEnd} C={C}
+                      onReorder={handleReorder}
+                      isDraggingAny={isDraggingContact}
+                      onDragStateChange={setIsDraggingContact}
+                      C={C}
                     />
                   ))}
                 </View>
@@ -364,56 +428,75 @@ export default function ContactsScreen() {
 }
 
 const styles = StyleSheet.create({
-  root:    { flex: 1 },
-  topNav:  { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
+  root: { flex: 1 },
+  topNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
   backBtn: { fontSize: 22, fontWeight: "700", width: 36 },
-  navTitle:{ fontSize: 15, fontWeight: "900", letterSpacing: 0.5 },
-  addBtn:  { fontSize: 14, fontWeight: "800" },
+  navTitle: { fontSize: 15, fontWeight: "900", letterSpacing: 0.5 },
+  addBtn: { fontSize: 14, fontWeight: "800" },
   scrollContent: { padding: 16 },
   infoBanner: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 14, borderWidth: 1, marginBottom: 4 },
-  infoEmoji:  { fontSize: 16 },
-  infoTxt:    { flex: 1, fontSize: 12, fontWeight: "600", lineHeight: 17 },
-  dragHint:    { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, marginTop: 8, marginBottom: 4 },
+  infoEmoji: { fontSize: 16 },
+  infoTxt: { flex: 1, fontSize: 12, fontWeight: "600", lineHeight: 17 },
+  dragHint: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, marginTop: 8, marginBottom: 4 },
   dragHintTxt: { fontSize: 11, fontWeight: "600" },
-  sectionLabel:{ fontSize: 9, fontWeight: "800", letterSpacing: 2, marginTop: 20, marginBottom: 10, marginLeft: 4 },
-  formCard:    { borderRadius: 16, borderWidth: 1, padding: 18, gap: 10 },
-  formTitle:   { fontSize: 14, fontWeight: "900", marginBottom: 4 },
-  formLabel:   { fontSize: 9, fontWeight: "800", letterSpacing: 1.5, marginBottom: 2 },
-  input:       { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 13, fontWeight: "600", marginBottom: 4 },
-  phoneError:  { fontSize: 10, fontWeight: "600", marginTop: -2, marginBottom: 4 },
-  relationGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  relationChip:    { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, borderWidth: 1 },
+  sectionLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 2, marginTop: 20, marginBottom: 10, marginLeft: 4 },
+  formCard: { borderRadius: 16, borderWidth: 1, padding: 18, gap: 10 },
+  formTitle: { fontSize: 14, fontWeight: "900", marginBottom: 4 },
+  formLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 1.5, marginBottom: 2 },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 13, fontWeight: "600", marginBottom: 4 },
+  phoneError: { fontSize: 10, fontWeight: "600", marginTop: -2, marginBottom: 4 },
+  relationGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  relationChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, borderWidth: 1 },
   relationChipTxt: { fontSize: 11, fontWeight: "700" },
-  formBtns:  { flexDirection: "row", gap: 10, marginTop: 8 },
-  formBtn:   { flex: 1, paddingVertical: 13, borderRadius: 12, alignItems: "center", borderWidth: 1 },
-  formBtnTxt:{ fontSize: 13, fontWeight: "800" },
+  formBtns: { flexDirection: "row", gap: 10, marginTop: 8 },
+  formBtn: { flex: 1, paddingVertical: 13, borderRadius: 12, alignItems: "center", borderWidth: 1 },
+  formBtnTxt: { fontSize: 13, fontWeight: "800" },
   contactsList: { gap: 12 },
-  contactCard:  { borderRadius: 16, overflow: "hidden" },
-  priorityBadge:   { alignSelf: "flex-start", marginLeft: 14, marginTop: 12, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, borderWidth: 1 },
-  priorityTxt:     { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
-  cardMain:        { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, paddingTop: 8 },
-  dragHandle:      { width: 24, height: 40, justifyContent: "center", alignItems: "center", gap: 5 },
-  dragBar:         { width: 16, height: 2.5, borderRadius: 1.5 },
-  avatar:          { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
-  avatarTxt:       { fontSize: 17, fontWeight: "900" },
-  contactName:     { fontSize: 15, fontWeight: "800", marginBottom: 2 },
-  contactPhone:    { fontSize: 12, fontWeight: "500", marginBottom: 5 },
-  relationBadge:   { alignSelf: "flex-start", paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8, borderWidth: 1 },
-  relationTxt:     { fontSize: 9, fontWeight: "800" },
-  cardActions:     { borderTopWidth: 1, paddingHorizontal: 14, paddingVertical: 10, gap: 8 },
-  primaryBadge:    { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  contactCard: { borderRadius: 16, overflow: "hidden" },
+  priorityBadge: { alignSelf: "flex-start", marginLeft: 14, marginTop: 12, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, borderWidth: 1 },
+  priorityTxt: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+  cardMain: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, paddingTop: 8 },
+  dragHandle: {
+    width: 28,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 8,
+  },
+  dragIconContainer: {
+    gap: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dragDotRow: {
+    flexDirection: "row",
+    gap: 4,
+  },
+  dragDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+  avatar: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  avatarTxt: { fontSize: 17, fontWeight: "900" },
+  contactName: { fontSize: 15, fontWeight: "800", marginBottom: 2 },
+  contactPhone: { fontSize: 12, fontWeight: "500", marginBottom: 5 },
+  relationBadge: { alignSelf: "flex-start", paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8, borderWidth: 1 },
+  relationTxt: { fontSize: 9, fontWeight: "800" },
+  cardActions: { borderTopWidth: 1, paddingHorizontal: 14, paddingVertical: 10, gap: 8 },
+  primaryBadge: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
   primaryBadgeTxt: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
-  actionBtns:      { flexDirection: "row", gap: 8 },
-  actionBtn:       { flex: 1, paddingVertical: 9, borderRadius: 10, alignItems: "center", borderWidth: 1 },
-  actionBtnTxt:    { fontSize: 12, fontWeight: "700" },
+  actionBtns: { flexDirection: "row", gap: 8 },
+  actionBtn: { flex: 1, paddingVertical: 9, borderRadius: 10, alignItems: "center", borderWidth: 1 },
+  actionBtnTxt: { fontSize: 12, fontWeight: "700" },
   emptyState: { alignItems: "center", paddingVertical: 48, gap: 12, paddingHorizontal: 16 },
   emptyEmoji: { fontSize: 52 },
   emptyTitle: { fontSize: 18, fontWeight: "900" },
-  emptySub:   { fontSize: 13, fontWeight: "500", textAlign: "center", lineHeight: 20 },
-  emptyBtn:   { marginTop: 8, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
-  emptyBtnTxt:{ fontSize: 14, fontWeight: "900" },
+  emptySub: { fontSize: 13, fontWeight: "500", textAlign: "center", lineHeight: 20 },
+  emptyBtn: { marginTop: 8, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
+  emptyBtnTxt: { fontSize: 14, fontWeight: "900" },
   addMoreBtn: { marginTop: 12, paddingVertical: 14, borderRadius: 14, alignItems: "center", borderWidth: 1, borderStyle: "dashed" },
   addMoreTxt: { fontSize: 13, fontWeight: "700" },
-  maxBanner:  { marginTop: 12, padding: 14, borderRadius: 12, borderWidth: 1, alignItems: "center" },
-  maxTxt:     { fontSize: 12, fontWeight: "600", textAlign: "center" },
+  maxBanner: { marginTop: 12, padding: 14, borderRadius: 12, borderWidth: 1, alignItems: "center" },
+  maxTxt: { fontSize: 12, fontWeight: "600", textAlign: "center" },
 });

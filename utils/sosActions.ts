@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Audio } from "expo-av";
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
 import * as Location from "expo-location";
 import * as SMS from "expo-sms";
 import { Linking, Platform } from "react-native";
@@ -78,16 +78,35 @@ export function callEmergency(number = "112") {
 let recordingRef:      Audio.Recording | null = null;
 let pendingRecordingId: string | null          = null;
 
+async function removePendingStorageEntry(id: string) {
+  try {
+    const existing = JSON.parse((await AsyncStorage.getItem("sos_recordings")) ?? "[]");
+    const filtered = existing.filter((r: { id: string; uri: string }) => !(r.id === id && r.uri === "__pending__"));
+    await AsyncStorage.setItem("sos_recordings", JSON.stringify(filtered));
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function startSOSRecording(): Promise<boolean> {
   try {
     if (Platform.OS === "web") return false;
 
     const { status } = await Audio.requestPermissionsAsync();
-    if (status !== "granted") return false;
+    if (status !== "granted") {
+      console.warn("[SOS Audio] Permissions not granted");
+      return false;
+    }
+
+    console.log("[SOS Audio] Starting audio recording...");
 
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
+      interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
     });
 
     const recording = new Audio.Recording();
@@ -101,7 +120,7 @@ export async function startSOSRecording(): Promise<boolean> {
     const entry = {
       id,
       uri:         "__pending__",
-      type:        "audio",
+      type:        "audio" as const,
       duration:    0,
       triggeredAt: new Date().toISOString(),
       sizeBytes:   0,
@@ -109,40 +128,89 @@ export async function startSOSRecording(): Promise<boolean> {
     const existing = JSON.parse((await AsyncStorage.getItem("sos_recordings")) ?? "[]");
     await AsyncStorage.setItem("sos_recordings", JSON.stringify([entry, ...existing]));
 
+    console.log(`[SOS Audio] Recording started. Pending ID: ${id}`);
     return true;
   } catch (e) {
-    console.warn("SOS Recording failed to start:", e);
+    console.warn("[SOS Audio] Recording failed to start:", e);
     return false;
   }
 }
 
 export async function stopSOSRecording(): Promise<string | null> {
-  try {
-    if (!recordingRef) return null;
+  const saveId = pendingRecordingId;
 
-    await recordingRef.stopAndUnloadAsync();
-    const uri = recordingRef.getURI();
-    recordingRef = null;
-
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-
-    // Update the placeholder entry with the real file URI
-    if (uri && pendingRecordingId) {
-      const existing = JSON.parse((await AsyncStorage.getItem("sos_recordings")) ?? "[]");
-      const updated  = existing.map((r: any) =>
-        r.id === pendingRecordingId ? { ...r, uri } : r
-      );
-      await AsyncStorage.setItem("sos_recordings", JSON.stringify(updated));
-      pendingRecordingId = null;
-    }
-
-    return uri ?? null;
-  } catch (e) {
-    console.warn("SOS Recording failed to stop:", e);
+  if (!recordingRef) {
+    console.warn("[SOS Audio] stopSOSRecording called but no recording in progress");
+    pendingRecordingId = null;
     return null;
   }
+
+  const rec = recordingRef;
+
+  let finalUri: string | null = null;
+  let durationMillis = 0;
+
+  try {
+    console.log("[SOS Audio] Stopping recording...");
+    const finalStatus = await rec.stopAndUnloadAsync();
+    finalUri = (finalStatus as { uri?: string | null })?.uri ?? rec.getURI() ?? null;
+    durationMillis = finalStatus.durationMillis ?? 0;
+    
+    console.log(`[SOS Audio] Recording stopped. URI: ${finalUri}, Duration: ${durationMillis}ms`);
+  } catch (e) {
+    console.warn("[SOS Audio] Recording failed to stop:", e);
+    recordingRef = null;
+    pendingRecordingId = null;
+    if (saveId) await removePendingStorageEntry(saveId);
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+    }).catch(() => {});
+    return null;
+  }
+
+  recordingRef = null;
+  pendingRecordingId = null;
+
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: false,
+    interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+  }).catch(() => {});
+
+  if (finalUri && saveId) {
+    const durationSec = Math.max(0, Math.round(durationMillis / 1000));
+    console.log(`[SOS Audio] Updating storage with real URI. ID: ${saveId}, Duration: ${durationSec}s`);
+    const existing = JSON.parse((await AsyncStorage.getItem("sos_recordings")) ?? "[]");
+    const updated = existing.map((r: { id: string; uri: string; duration?: number }) =>
+      r.id === saveId ? { ...r, uri: finalUri!, duration: durationSec || r.duration } : r
+    );
+    await AsyncStorage.setItem("sos_recordings", JSON.stringify(updated));
+    console.log(`[SOS Audio] Storage updated successfully`);
+  } else if (saveId && !finalUri) {
+    console.warn(`[SOS Audio] No URI returned, removing pending entry ${saveId}`);
+    await removePendingStorageEntry(saveId);
+  }
+
+  return finalUri;
 }
 
 export function isRecording(): boolean {
   return recordingRef !== null;
+}
+
+// ─── Debug Utilities ──────────────────────────────────────────────────────────
+
+export async function debugLogStoredRecordings() {
+  try {
+    const raw = await AsyncStorage.getItem("sos_recordings");
+    const stored = raw ? JSON.parse(raw) : [];
+    console.log(`[DEBUG] AsyncStorage sos_recordings: ${stored.length} records`);
+    stored.forEach((r: any, i: number) => {
+      console.log(`  [${i}] ID: ${r.id} | Type: ${r.type} | URI: ${r.uri} | Duration: ${r.duration}s | At: ${r.triggeredAt}`);
+    });
+    return stored;
+  } catch (e) {
+    console.error("[DEBUG] Error reading recordings:", e);
+    return [];
+  }
 }

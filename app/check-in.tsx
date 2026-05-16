@@ -1,4 +1,7 @@
 import { useTheme } from "@/context/ThemeContext";
+import { getFeedbackSettings } from "@/utils/appSettings";
+import { sendLocalNotification } from "@/utils/notifications";
+import { playEmergencySound, playSuccessSound } from "@/utils/soundEffects";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
@@ -46,12 +49,24 @@ export default function CheckInScreen() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressRef = useRef<Animated.CompositeAnimation | null>(null);
+  const feedbackRef = useRef({ notificationsEnabled: true, soundEnabled: true });
 
   useEffect(() => {
     loadContacts();
+    loadFeedbackSettings();
     fetchLocation();
     return () => stopTimer();
   }, []);
+
+  async function loadFeedbackSettings() {
+    feedbackRef.current = await getFeedbackSettings();
+  }
+
+  async function playFeedback(type: Haptics.NotificationFeedbackType) {
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(type);
+    }
+  }
 
   // ── Pulse for missed state ──
   useEffect(() => {
@@ -101,7 +116,8 @@ export default function CheckInScreen() {
     setTimeLeft(totalSecs);
     startTimer(totalSecs);
     startProgress(totalSecs);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void playFeedback(Haptics.NotificationFeedbackType.Success);
+    void sendLocalNotification("Check-In Started", `Timer set for ${intervalMinutes} minutes.`);
   }
 
   function startTimer(seconds: number) {
@@ -136,7 +152,8 @@ export default function CheckInScreen() {
 
   async function handleSafeCheckIn() {
     stopTimer();
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
 
     const msg = buildSafeMessage();
     const isAvailable = await SMS.isAvailableAsync();
@@ -147,6 +164,7 @@ export default function CheckInScreen() {
     const newCount = checkInCount + 1;
     setCheckInCount(newCount);
     setCheckInState("safe");
+    void sendLocalNotification("Safe Check-In Sent", "Your safe check-in message was prepared for your contacts.");
 
     // Resume after 2 seconds
     setTimeout(() => {
@@ -160,13 +178,15 @@ export default function CheckInScreen() {
 
   async function triggerMissed() {
     setCheckInState("missed");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    await playFeedback(Haptics.NotificationFeedbackType.Error);
+    void playEmergencySound();
 
     const msg = buildMissedMessage();
     const isAvailable = await SMS.isAvailableAsync();
     if (isAvailable && contacts.length > 0) {
       await SMS.sendSMSAsync(contacts.map((c) => c.phone), msg);
     }
+    void sendLocalNotification("Check-In Missed", "Your emergency contacts were alerted.");
   }
 
   async function handleResume() {
@@ -177,7 +197,9 @@ export default function CheckInScreen() {
     setTimeLeft(totalSecs);
     startTimer(totalSecs);
     startProgress(totalSecs);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
+    void sendLocalNotification("Check-In Resumed", `Next check-in is due in ${intervalMinutes} minutes.`);
   }
 
   function buildSafeMessage() {

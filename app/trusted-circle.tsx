@@ -1,10 +1,11 @@
 import { ThemedAlert, useThemedAlert } from "@/components/ThemedAlert";
 import { useTheme } from "@/context/ThemeContext";
 import { useScrollToTop } from "@/hooks/useScrollToTop";
+import { validatePhoneNumber } from "@/utils/validation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Keyboard, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface TrustedPerson { id: string; name: string; phone: string; relation: string; canSeeLocation: boolean; }
@@ -46,6 +47,8 @@ function AddPersonForm({ onAdd, onCancel, C, onValidationError }: { onAdd: (p: O
   const [name, setName] = useState(""); const [phone, setPhone] = useState(""); const [relation, setRelation] = useState("Friend");
   function handleAdd() {
     if (!name.trim() || !phone.trim()) { onValidationError("Missing Info", "Please enter name and phone number."); return; }
+    const phoneError = validatePhoneNumber(phone);
+    if (phoneError) { onValidationError("Invalid Phone Number", phoneError); return; }
     onAdd({ name: name.trim(), phone: phone.trim(), relation, canSeeLocation: true });
   }
   return (
@@ -54,7 +57,14 @@ function AddPersonForm({ onAdd, onCancel, C, onValidationError }: { onAdd: (p: O
       <Text style={[s.formLabel, { color: C.textMuted }]}>NAME</Text>
       <TextInput value={name} onChangeText={setName} placeholder="Full name" placeholderTextColor={C.textDim} style={[s.input, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary }]} />
       <Text style={[s.formLabel, { color: C.textMuted }]}>PHONE</Text>
-      <TextInput value={phone} onChangeText={setPhone} placeholder="+91 98765 43210" placeholderTextColor={C.textDim} keyboardType="phone-pad" style={[s.input, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary }]} />
+      <TextInput value={phone} onChangeText={setPhone}
+        onEndEditing={() => {
+          const phoneError = validatePhoneNumber(phone);
+          if (phone.trim() && phoneError) onValidationError("Invalid Phone Number", phoneError);
+        }}
+        placeholder="+91 98765 43210" placeholderTextColor={C.textDim} keyboardType="phone-pad"
+        style={[s.input, { backgroundColor: C.inputBg, borderColor: phone && validatePhoneNumber(phone) ? C.red : C.inputBorder, color: C.textPrimary }]} />
+      {phone.length > 0 && validatePhoneNumber(phone) && <Text style={[s.phoneError, { color: C.red }]}>{validatePhoneNumber(phone)}</Text>}
       <Text style={[s.formLabel, { color: C.textMuted }]}>RELATION</Text>
       <View style={s.relationGrid}>
         {RELATIONS.map((r) => (
@@ -84,7 +94,12 @@ export default function TrustedCircleScreen() {
       buttons: [{ label: "Cancel", onPress: () => {} }, { label: "Remove", destructive: true, onPress: () => save(people.filter((p) => p.id !== id)) }] });
   }
   function handleToggleLocation(id: string) { save(people.map((p) => p.id === id ? { ...p, canSeeLocation: !p.canSeeLocation } : p)); }
-  function handleValidationError(title: string, message: string) { showAlert({ title, message, buttons: [{ label: "OK", onPress: () => {}, primary: true }] }); }
+  function handleValidationError(title: string, message: string) {
+    Keyboard.dismiss();
+    setTimeout(() => {
+      showAlert({ title, message, buttons: [{ label: "OK", onPress: () => {}, primary: true }] });
+    }, 80);
+  }
 
   return (
     <View style={[s.root, { backgroundColor: C.bg, paddingTop: insets.top }]}>
@@ -135,6 +150,7 @@ const s = StyleSheet.create({
   heroEmoji:{fontSize:36}, heroTitle:{fontSize:17,fontWeight:"900",textAlign:"center"}, heroBody:{fontSize:13,fontWeight:"500",textAlign:"center",lineHeight:19},
   formCard:{borderRadius:16,borderWidth:1,padding:18,gap:10}, formTitle:{fontSize:14,fontWeight:"900",marginBottom:4},
   formLabel:{fontSize:9,fontWeight:"800",letterSpacing:1.5,marginBottom:2}, input:{borderWidth:1,borderRadius:10,paddingHorizontal:14,paddingVertical:11,fontSize:13,fontWeight:"600",marginBottom:4},
+  phoneError:{fontSize:10,fontWeight:"600",marginTop:-2,marginBottom:4},
   relationGrid:{flexDirection:"row",flexWrap:"wrap",gap:8}, relationChip:{paddingHorizontal:12,paddingVertical:7,borderRadius:18,borderWidth:1},
   relationChipTxt:{fontSize:11,fontWeight:"700"}, formBtns:{flexDirection:"row",gap:10,marginTop:8},
   formBtn:{flex:1,paddingVertical:12,borderRadius:12,alignItems:"center",borderWidth:1}, formBtnTxt:{fontSize:13,fontWeight:"800"},

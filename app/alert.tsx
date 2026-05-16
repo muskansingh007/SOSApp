@@ -1,32 +1,43 @@
 import { RotatingTips } from "@/components/RotatingTips";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  cancelLocationUpdateNotifications,
-  registerForPushNotifications,
-  sendSMSSentNotification,
-  sendSOSCancelledNotification,
-  sendSOSTriggerNotification,
+    cancelLocationUpdateNotifications,
+    registerForPushNotifications,
+    sendSMSSentNotification,
+    sendSOSCancelledNotification,
+    sendSOSTriggerNotification,
 } from "@/utils/notifications";
 import {
-  startSOSRecording,
-  stopSOSRecording,
+    isRecording,
+    startSOSRecording,
+    stopSOSRecording,
 } from "@/utils/sosActions";
+import { playEmergencySound, playSuccessSound } from "@/utils/soundEffects";
+import {
+    isVideoRecordingActive,
+    setSOSCameraRef,
+    startSOSVideoRecording,
+    stopSOSVideoRecording,
+} from "@/utils/sosVideoRecording";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Camera, CameraView } from "expo-camera";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as SMS from "expo-sms";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Animated,
-  Easing,
-  Linking,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Animated,
+    Easing,
+    InteractionManager,
+    Linking,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -102,6 +113,8 @@ export default function AlertScreen() {
   const [elapsedSeconds, setElapsedSeconds]   = useState(0);
   const [alertTime, setAlertTime]             = useState("");
   const [audioRecording, setAudioRecording]   = useState(false);
+  const [videoRecording, setVideoRecording]   = useState(false);
+  const [sosWantsCamera, setSosWantsCamera]   = useState(false);
 
   const countdownRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef    = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -110,11 +123,39 @@ export default function AlertScreen() {
   const cancelled     = useRef(false);
   const settingsRef   = useRef<Record<string, any>>({});
   const countdownTotal = useRef(3);
+  /** Latest triggerSOS — interval callback must not use a stale closure from mount. */
+  const triggerSOSRef = useRef<() => Promise<void>>(async () => {});
+  const contactsRef   = useRef<Contact[]>([]);
+  const locationRef   = useRef<{ latitude: number; longitude: number } | null>(null);
+  const locationUrlRef = useRef<string | null>(null);
+  const sosCameraRef  = useRef<InstanceType<typeof CameraView> | null>(null);
+  const cameraReadyRef = useRef(false);
+  const cameraMountFailedRef = useRef(false);
+
+  useEffect(() => {
+    contactsRef.current = contacts;
+  }, [contacts]);
+
+  useEffect(() => {
+    locationRef.current = location;
+    locationUrlRef.current = locationUrl;
+  }, [location, locationUrl]);
 
   useEffect(() => {
     loadAll();
     startPulse();
-    return () => cleanup();
+    return () => {
+      cleanup();
+      cameraReadyRef.current = false;
+      cameraMountFailedRef.current = false;
+      setSOSCameraRef(null);
+      if (isVideoRecordingActive()) {
+        void stopSOSVideoRecording();
+      }
+      if (isRecording()) {
+        void stopSOSRecording();
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -130,8 +171,28 @@ export default function AlertScreen() {
   async function loadAll() {
     const raw = await AsyncStorage.getItem("settings");
     settingsRef.current = raw ? JSON.parse(raw) : {};
+    setSosWantsCamera(!!settingsRef.current.autoVideoRecording);
+    
+    // Request camera permissions EARLY if video recording is enabled
+    if (settingsRef.current.autoVideoRecording && Platform.OS !== "web") {
+      console.log("SOS: autoVideoRecording enabled, requesting camera permissions...");
+      try {
+        const { status: camStatus } = await Camera.requestCameraPermissionsAsync();
+        const { status: micStatus } = await Camera.requestMicrophonePermissionsAsync();
+        console.log(`SOS: Camera permission: ${camStatus}, Microphone permission: ${micStatus}`);
+        if (camStatus !== "granted" || micStatus !== "granted") {
+          console.warn("SOS: Camera/mic permissions denied, video recording disabled");
+          setSosWantsCamera(false);
+        }
+      } catch (e) {
+        console.warn("SOS: Error requesting permissions:", e);
+        setSosWantsCamera(false);
+      }
+    }
+    
     await loadContacts();
-    await fetchLocation();
+    // Do not block countdown on GPS — high-accuracy fixes can take several seconds.
+    void fetchLocation();
     if (settingsRef.current.notificationsEnabled !== false) {
       registerForPushNotifications().catch(() => {});
     }
@@ -159,9 +220,13 @@ export default function AlertScreen() {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc.coords);
-      setLocationUrl(`https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`);
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = loc.coords;
+      const url = `https://maps.google.com/?q=${coords.latitude},${coords.longitude}`;
+      locationRef.current = coords;
+      locationUrlRef.current = url;
+      setLocation(coords);
+      setLocationUrl(url);
     } catch {}
   }
 
@@ -172,9 +237,13 @@ export default function AlertScreen() {
     countdownRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (cancelled.current) { clearInterval(countdownRef.current!); return prev; }
-        if (prev <= 1) { clearInterval(countdownRef.current!); triggerSOS(); return 0; }
+        if (prev <= 1) {
+          clearInterval(countdownRef.current!);
+          void triggerSOSRef.current();
+          return 0;
+        }
         if (settingsRef.current.soundEnabled !== false) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
         return prev - 1;
       });
@@ -207,40 +276,86 @@ export default function AlertScreen() {
     const soundOn  = settings.soundEnabled !== false;
     const notifsOn = settings.notificationsEnabled !== false;
 
-    if (soundOn) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    async function ensureCoordsForSOS(): Promise<{
+      currentCoords: { latitude: number; longitude: number } | null;
+      currentUrl: string | null;
+    }> {
+      let currentCoords = locationRef.current;
+      let currentUrl    = locationUrlRef.current;
+      if (currentCoords) return { currentCoords, currentUrl };
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          currentCoords = loc.coords;
+          currentUrl    = `https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`;
+          locationRef.current = currentCoords;
+          locationUrlRef.current = currentUrl;
+          setLocation(currentCoords);
+          setLocationUrl(currentUrl);
+        }
+      } catch {
+        /* keep null */
+      }
+      return { currentCoords, currentUrl };
     }
 
-    // ── Auto Audio Recording ──────────────────────────────────────────────────
+    const hapticP = soundOn
+      ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+      : Promise.resolve();
+    if (soundOn) void playEmergencySound();
+
+    await Promise.all([hapticP, ensureCoordsForSOS()]);
+
+    // Start video recording if enabled (runs async in background)
+    if (settings.autoVideoRecording) {
+      console.log("SOS: Video recording enabled, waiting for camera ready...");
+      cameraMountFailedRef.current = false;
+      const deadline = Date.now() + 3000;
+      let attempts = 0;
+      while (!cameraReadyRef.current && !cameraMountFailedRef.current && Date.now() < deadline) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      console.log(`SOS: Camera ready attempts: ${attempts}, ready: ${cameraReadyRef.current}, failed: ${cameraMountFailedRef.current}`);
+      
+      if (cameraMountFailedRef.current) {
+        console.warn("SOS: Camera mount failed, skipping video recording");
+      } else if (!cameraReadyRef.current) {
+        console.warn("SOS: Camera not ready after timeout, skipping video recording");
+      } else {
+        try {
+          const v = await startSOSVideoRecording();
+          if (v) {
+            console.log("SOS: Video recording started");
+            setVideoRecording(true);
+          } else {
+            console.warn("SOS: Video recording failed to start");
+          }
+        } catch (e) {
+          console.warn("SOS: Video recording exception:", e);
+          /* ignore */
+        }
+      }
+    }
+    
+    // Also start audio recording if enabled (both can run simultaneously)
     if (settings.autoAudioRecording) {
       try {
         const started = await startSOSRecording();
         if (started) setAudioRecording(true);
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
 
-    // ── Location ──────────────────────────────────────────────────────────────
-    let currentCoords = location;
-    let currentUrl    = locationUrl;
-    if (!currentCoords) {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          currentCoords = loc.coords;
-          currentUrl    = `https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`;
-          setLocation(loc.coords);
-          setLocationUrl(currentUrl);
-        }
-      } catch {}
-    }
+    let currentCoords = locationRef.current;
+    let currentUrl    = locationUrlRef.current;
 
-    // ── Push notification ─────────────────────────────────────────────────────
     if (notifsOn && currentCoords) {
       sendSOSTriggerNotification(currentCoords).catch(() => {});
     }
 
-    // ── Build & send SMS ──────────────────────────────────────────────────────
     const sosMessage      = settings.sosMessage ?? "🆘 I need help! This is an emergency.";
     const includeLocation = settings.includeLocationLink !== false;
     const time            = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -248,13 +363,16 @@ export default function AlertScreen() {
     const fullMessage     = `${sosMessage}\n\nSent at ${time}.${locationPart}`;
 
     const contactList: Contact[] =
-      contacts.length > 0
-        ? contacts
+      contactsRef.current.length > 0
+        ? contactsRef.current
         : JSON.parse((await AsyncStorage.getItem("contacts")) ?? "[]");
 
     for (let i = 0; i < contactList.length; i++) {
       setContactStatuses((prev) => ({ ...prev, [i]: "pending" }));
     }
+
+    // Show active UI before SMS — the composer can block for a long time on some devices.
+    setPhase("active");
 
     const isAvailable = await SMS.isAvailableAsync();
     if (isAvailable && contactList.length > 0) {
@@ -271,17 +389,24 @@ export default function AlertScreen() {
       }
     }
 
-    // ── Auto-call first contact ───────────────────────────────────────────────
     if (settings.autoCallContacts !== false && contactList.length > 0) {
       setTimeout(() => {
         setContactStatuses((prev) => ({ ...prev, 0: "calling" }));
-        Linking.openURL(`tel:${contactList[0].phone.replace(/\D/g, "")}`).then(() => {
-          setTimeout(() => setContactStatuses((prev) => ({ ...prev, 0: "sent" })), 3000);
+        InteractionManager.runAfterInteractions(() => {
+          void Linking.openURL(`tel:${contactList[0].phone.replace(/\D/g, "")}`).then(() => {
+            setTimeout(() => setContactStatuses((prev) => ({ ...prev, 0: "sent" })), 3000);
+          });
         });
       }, 1500);
     }
+  }
 
-    setPhase("active");
+  triggerSOSRef.current = triggerSOS;
+
+  function openMapsUrl(url: string) {
+    InteractionManager.runAfterInteractions(() => {
+      void Linking.openURL(url);
+    });
   }
 
   function handleCancel() {
@@ -291,26 +416,38 @@ export default function AlertScreen() {
     setPhase("cancelled");
     if (settingsRef.current.soundEnabled !== false) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      void playSuccessSound();
     }
     setTimeout(() => router.back(), 1500);
   }
 
   async function handleDismiss() {
-    // Stop audio recording if active
-    if (audioRecording) {
-      try { await stopSOSRecording(); } catch {}
+    if (videoRecording || isVideoRecordingActive()) {
+      try {
+        await stopSOSVideoRecording();
+      } catch {}
+      setVideoRecording(false);
+    }
+    // Stop audio recording if active (use isRecording() so we never skip stop after gesture back / stale state)
+    if (audioRecording || isRecording()) {
+      try {
+        await stopSOSRecording();
+      } catch {}
       setAudioRecording(false);
     }
     if (settingsRef.current.notificationsEnabled !== false) {
       cancelLocationUpdateNotifications().catch(() => {});
       sendSOSCancelledNotification().catch(() => {});
     }
+    if (settingsRef.current.soundEnabled !== false) void playSuccessSound();
     cleanup();
     router.back();
   }
 
   function handleCallContact(phone: string) {
-    Linking.openURL(`tel:${phone.replace(/\D/g, "")}`);
+    InteractionManager.runAfterInteractions(() => {
+      void Linking.openURL(`tel:${phone.replace(/\D/g, "")}`);
+    });
   }
 
   function cleanup() {
@@ -351,10 +488,12 @@ export default function AlertScreen() {
       </View>
 
       {/* Recording indicator */}
-      {audioRecording && phase === "active" && (
+      {(audioRecording || videoRecording) && phase === "active" && (
         <View style={[styles.recordingBar, { backgroundColor: C.redDim, borderColor: C.red + "44" }]}>
           <View style={[styles.recDot, { backgroundColor: C.red }]} />
-          <Text style={[styles.recTxt, { color: C.red }]}>Audio REC</Text>
+          <Text style={[styles.recTxt, { color: C.red }]}>
+            {videoRecording ? "Video REC" : "Audio REC"}
+          </Text>
         </View>
       )}
 
@@ -417,7 +556,7 @@ export default function AlertScreen() {
                     <Text style={[styles.locationSub, { color: C.textMuted }]}>Shared with emergency contacts</Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() => locationUrl && Linking.openURL(locationUrl)}
+                    onPress={() => locationUrl && openMapsUrl(locationUrl)}
                     style={[styles.openMapBtn, { backgroundColor: C.blueDim, borderColor: C.blue }]}
                   >
                     <Text style={[styles.openMapTxt, { color: C.blue }]}>Maps →</Text>
@@ -464,12 +603,45 @@ export default function AlertScreen() {
           </View>
         )}
       </ScrollView>
+
+      {Platform.OS !== "web" && sosWantsCamera && (
+        <CameraView
+          ref={sosCameraRef}
+          style={styles.sosHiddenCamera}
+          facing="back"
+          mode="video"
+          mute={false}
+          pointerEvents="none"
+          onCameraReady={() => {
+            console.log("SOS: Camera ready event fired");
+            cameraMountFailedRef.current = false;
+            setSOSCameraRef(sosCameraRef.current);
+            cameraReadyRef.current = true;
+          }}
+          onMountError={(ev) => {
+            const message = (ev as { message?: string }).message ?? String(ev);
+            console.error("SOS: Camera mount error:", message);
+            cameraMountFailedRef.current = true;
+            cameraReadyRef.current = false;
+            setSOSCameraRef(null);
+          }}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  sosHiddenCamera: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    opacity: 0,
+    pointerEvents: "none",
+    right: -9999,
+    bottom: -9999,
+  },
   topNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
   brandRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   brandLetter: { fontSize: 16, fontWeight: "900", letterSpacing: 1 },

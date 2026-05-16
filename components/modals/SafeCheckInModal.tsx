@@ -1,4 +1,7 @@
 import { useTheme } from "@/context/ThemeContext";
+import { getFeedbackSettings } from "@/utils/appSettings";
+import { sendLocalNotification } from "@/utils/notifications";
+import { playEmergencySound, playSuccessSound } from "@/utils/soundEffects";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
@@ -49,11 +52,13 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
   const progressAnim = useRef(new Animated.Value(1)).current;
   const progressAnim2 = useRef<Animated.CompositeAnimation | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const feedbackRef = useRef({ notificationsEnabled: true, soundEnabled: true });
 
   // Load contacts and location when modal opens
   useEffect(() => {
     if (visible) {
       loadContacts();
+      loadFeedbackSettings();
       fetchLocation();
     } else {
       stopTimer();
@@ -62,6 +67,16 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
       setTimeLeft(0);
     }
   }, [visible]);
+
+  async function loadFeedbackSettings() {
+    feedbackRef.current = await getFeedbackSettings();
+  }
+
+  async function playFeedback(type: Haptics.NotificationFeedbackType) {
+    if (feedbackRef.current.soundEnabled) {
+      await Haptics.notificationAsync(type);
+    }
+  }
 
   // Pulse on missed state
   useEffect(() => {
@@ -99,7 +114,8 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
     setTimeLeft(totalSecs);
     startTimer(totalSecs);
     startProgress(totalSecs);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void playFeedback(Haptics.NotificationFeedbackType.Success);
+    void sendLocalNotification("Check-In Started", `Timer set for ${intervalMinutes} minutes.`);
   }
 
   function startTimer(seconds: number) {
@@ -136,7 +152,8 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
   async function handleSafeCheckIn() {
     stopTimer();
     setAutoSending(true);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
 
     // Auto-send the message — no user interaction needed
     const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -153,6 +170,7 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
     setCheckInCount(newCount);
     setAutoSending(false);
     setCheckInState("safe");
+    void sendLocalNotification("Safe Check-In Sent", "Your safe check-in message was prepared for your contacts.");
 
     // Auto-reset timer for next round after 1.5s
     setTimeout(() => {
@@ -166,7 +184,8 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
 
   async function triggerMissed() {
     setCheckInState("missed");
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    await playFeedback(Haptics.NotificationFeedbackType.Error);
+    void playEmergencySound();
 
     // Auto-alert contacts
     const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -177,6 +196,7 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
         await SMS.sendSMSAsync(contacts.map((c) => c.phone), msg);
       }
     } catch {}
+    void sendLocalNotification("Check-In Missed", "Your emergency contacts were alerted.");
   }
 
   async function handleResume() {
@@ -186,7 +206,9 @@ export default function SafeCheckInModal({ visible, onClose }: Props) {
     setTimeLeft(totalSecs);
     startTimer(totalSecs);
     startProgress(totalSecs);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await playFeedback(Haptics.NotificationFeedbackType.Success);
+    void playSuccessSound();
+    void sendLocalNotification("Check-In Resumed", `Next check-in is due in ${intervalMinutes} minutes.`);
   }
 
   function handleStop() {

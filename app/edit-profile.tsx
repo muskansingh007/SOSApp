@@ -1,9 +1,11 @@
 import { useTheme } from "@/context/ThemeContext";
+import { validateOptionalEmailAddress, validateOptionalPhoneNumber } from "@/utils/validation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
+  Keyboard,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -122,6 +124,17 @@ export default function EditProfileScreen() {
     setAlertVisible(true);
   }
 
+  function showValidationAlert(title: string, message: string) {
+    Keyboard.dismiss();
+    setTimeout(() => {
+      showAlert({
+        title,
+        message,
+        buttons: [{ label: "OK", onPress: () => setAlertVisible(false), primary: true }],
+      });
+    }, 80);
+  }
+
   useEffect(() => {
     AsyncStorage.getItem("profile").then((v) => {
       if (v) setProfile({ ...DEFAULTS, ...JSON.parse(v) });
@@ -136,11 +149,24 @@ export default function EditProfileScreen() {
 
   async function handleSave() {
     if (!profile.name.trim()) {
-      showAlert({
-        title: "Name Required",
-        message: "Please enter your name to save your profile.",
-        buttons: [{ label: "OK", onPress: () => setAlertVisible(false), primary: true }],
-      });
+      showValidationAlert("Name Required", "Please enter your name to save your profile.");
+      return;
+    }
+    const phoneError = validateOptionalPhoneNumber(profile.phone);
+    const emailError = validateOptionalEmailAddress(profile.email);
+    if (phoneError && emailError) {
+      showValidationAlert(
+        "Invalid Phone and Email",
+        "Please enter a valid phone number and email address."
+      );
+      return;
+    }
+    if (phoneError) {
+      showValidationAlert("Invalid Phone Number", phoneError);
+      return;
+    }
+    if (emailError) {
+      showValidationAlert("Invalid Email", emailError);
       return;
     }
     await AsyncStorage.setItem("profile", JSON.stringify(profile));
@@ -216,14 +242,30 @@ export default function EditProfileScreen() {
           <View style={[styles.divider, { backgroundColor: C.border }]} />
           <FieldLabel label="PHONE NUMBER" C={C} />
           <TextInput value={profile.phone} onChangeText={(v) => update({ phone: v })}
+            onEndEditing={() => {
+              const error = validateOptionalPhoneNumber(profile.phone);
+              if (error) showValidationAlert("Invalid Phone Number", error);
+            }}
             placeholder="+91 98765 43210" placeholderTextColor={C.textDim} keyboardType="phone-pad"
-            style={[styles.input, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary }]} />
+            style={[styles.input, {
+              backgroundColor: C.inputBg,
+              borderColor: validateOptionalPhoneNumber(profile.phone) ? C.red : C.inputBorder,
+              color: C.textPrimary,
+            }]} />
           <View style={[styles.divider, { backgroundColor: C.border }]} />
           <FieldLabel label="EMAIL" C={C} />
           <TextInput value={profile.email} onChangeText={(v) => update({ email: v })}
+            onEndEditing={() => {
+              const error = validateOptionalEmailAddress(profile.email);
+              if (error) showValidationAlert("Invalid Email", error);
+            }}
             placeholder="you@example.com" placeholderTextColor={C.textDim}
             keyboardType="email-address" autoCapitalize="none"
-            style={[styles.input, { backgroundColor: C.inputBg, borderColor: C.inputBorder, color: C.textPrimary }]} />
+            style={[styles.input, {
+              backgroundColor: C.inputBg,
+              borderColor: validateOptionalEmailAddress(profile.email) ? C.red : C.inputBorder,
+              color: C.textPrimary,
+            }]} />
         </View>
 
         {/* ── Medical Info ── */}

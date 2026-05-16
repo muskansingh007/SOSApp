@@ -1,26 +1,29 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider as NavigationThemeProvider,
+    DarkTheme,
+    DefaultTheme,
+    ThemeProvider as NavigationThemeProvider,
 } from "@react-navigation/native";
+import * as Notifications from "expo-notifications";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
 
 import {
-  ThemeProvider as AppThemeProvider,
-  useTheme,
+    ThemeProvider as AppThemeProvider,
+    useTheme,
 } from "@/context/ThemeContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { registerForPushNotifications, setupForegroundNotificationListener, setupNotificationResponseHandler } from "@/utils/NotificationHelper";
 
 export const unstable_settings = {
   anchor: "(tabs)",
 };
 
-function LoadingScreen() {
+function LoadingScreen({ isVisible, onFinish }: { isVisible: boolean; onFinish: () => void }) {
   const { theme: C } = useTheme();
 
   const pulse1 = useRef(new Animated.Value(1)).current;
@@ -78,6 +81,14 @@ function LoadingScreen() {
     animateDot(dot3, 400);
   }, [dot1, dot2, dot3]);
 
+  useEffect(() => {
+    if (!isVisible) {
+      Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        onFinish();
+      });
+    }
+  }, [isVisible, fadeAnim, onFinish]);
+
   return (
     <Animated.View style={[styles.loadingRoot, { backgroundColor: C.bg, opacity: fadeAnim }]}>
       <View style={styles.logoArea}>
@@ -112,6 +123,7 @@ function LoadingScreen() {
 function AppNavigator() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
+  const [shouldShowLoading, setShouldShowLoading] = useState(true);
 
   useEffect(() => {
     async function checkOnboarding() {
@@ -164,21 +176,54 @@ function AppNavigator() {
           options={{ presentation: "modal", headerShown: false, animation: "none" }}
         />
       </Stack>
-      {isLoading && <LoadingScreen />}
+      {shouldShowLoading && (
+        <LoadingScreen 
+          isVisible={isLoading} 
+          onFinish={() => setShouldShowLoading(false)}
+        />
+      )}
     </View>
   );
 }
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const navigationRef = useRef(null);
+
+  useEffect(() => {
+    // Configure notification handler for foreground
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+
+    // Register for push notifications
+    registerForPushNotifications().catch(e => console.warn('Failed to register for notifications:', e));
+
+    // Set up listeners
+    const responseSubscription = setupNotificationResponseHandler(navigationRef);
+    const receivedSubscription = setupForegroundNotificationListener((notification) => {
+      console.log('Notification received:', notification);
+    });
+
+    return () => {
+      responseSubscription?.remove();
+      receivedSubscription?.remove();
+    };
+  }, []);
 
   return (
-    <AppThemeProvider>
-      <NavigationThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-        <AppNavigator />
-        <StatusBar style="auto" />
-      </NavigationThemeProvider>
-    </AppThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AppThemeProvider>
+        <NavigationThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+          <AppNavigator />
+          <StatusBar style="auto" />
+        </NavigationThemeProvider>
+      </AppThemeProvider>
+    </GestureHandlerRootView>
   );
 }
 

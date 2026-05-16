@@ -1,10 +1,12 @@
 {
   "expo": {
-    "icon": "./assets/icon.png",
+    "name": "SOS",
+    "slug": "sosapp",
+    "icon": "./assets/images/icon.png",
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundImage": "./assets/images/ic_launcher_background.png"
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#F35B1C"
       },
       "package": "com.anonymous.sosapp"
     },
@@ -12,7 +14,25 @@
       "favicon": "./assets/favicon.ico"
     },
     "plugins": [
-      "expo-maps"
-    ]
+      "expo-maps",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow SOSApp to record video during an emergency SOS.",
+          "microphonePermission": "Allow SOSApp to record audio during SOS video.",
+          "recordAudioAndroid": true
+        }
+      ]
+    ],
+    "notification": {
+      "icon": "./assets/images/icon.png",
+      "color": "#D32F2F"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a06f3d0d-00ad-4d2a-a338-eda55bf14863"
+      }
+    },
+    "owner": "muskans"
   }
 }
